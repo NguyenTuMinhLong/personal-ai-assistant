@@ -1,15 +1,36 @@
-// app/(main)/chat/page.tsx
-export default function ChatPage() {
+import { currentUser } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+
+import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
+import { listUserDocuments } from "@/lib/documents";
+
+type ChatPageProps = {
+  searchParams: Promise<{ documentId?: string | string[] }>;
+};
+
+export const dynamic = "force-dynamic";
+
+export default async function ChatPage({ searchParams }: ChatPageProps) {
+  const user = await currentUser();
+
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  const documents = await listUserDocuments(user.id);
+  const params = await searchParams;
+  const documentIdParam = params.documentId;
+  const documentId =
+    typeof documentIdParam === "string" ? documentIdParam : null;
+  const initialDocumentId =
+    documentId && documents.some((doc) => doc.id === documentId)
+      ? documentId
+      : documents[0]?.id ?? null;
+
   return (
-    <div>
-      <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-6">
-        💬 Chat với SecondBrain
-      </h1>
-      <div className="bg-white dark:bg-gray-900 rounded-3xl p-8 border border-gray-200 dark:border-gray-700 h-96 flex items-center justify-center">
-        <p className="text-gray-500 dark:text-gray-400 text-lg">
-          Chat interface sẽ xuất hiện ở đây (bước sau)
-        </p>
-      </div>
-    </div>
+    <ChatWorkspace
+      documents={documents}
+      initialDocumentId={initialDocumentId}
+    />
   );
 }
