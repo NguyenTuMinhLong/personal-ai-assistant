@@ -4,6 +4,7 @@ export type Document = {
   user_id: string;
   filename: string;
   content: string;
+  summary?: string;
   metadata: {
     size?: number;
     pageCount?: number;
@@ -24,6 +25,7 @@ export type Chunk = {
 export type ChatSession = {
   id: string;
   user_id: string;
+  document_ids: string;
   title: string;
   created_at: string;
   updated_at: string;

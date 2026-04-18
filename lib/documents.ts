@@ -1,5 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
+// lib/documents.ts
 
+import { createClient } from "@supabase/supabase-js";
 import { getSupabaseUrl } from "@/lib/supabase";
 
 export type StoredDocument = {
@@ -9,6 +10,7 @@ export type StoredDocument = {
 
 export type StoredDocumentWithContent = StoredDocument & {
   content: string;
+  summary?: string; // 👈 thêm
 };
 
 type DocumentEmbeddingRow = {
@@ -50,7 +52,7 @@ export async function getUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
-    .select("id, filename, content")
+    .select("id, filename, content, summary") // 👈 thêm summary
     .eq("user_id", userId)
     .eq("id", documentId)
     .maybeSingle();

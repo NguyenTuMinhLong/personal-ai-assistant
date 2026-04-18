@@ -8,6 +8,7 @@ import { getUserDocument, listDocumentEmbeddings } from "@/lib/documents";
 type RequestBody = {
   documentId?: string;
   message?: string;
+  sessionId?: string;
 };
 
 type EmbeddingRow = {
