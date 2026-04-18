@@ -28,6 +28,7 @@ export function DocumentsManager({
   const [documents, setDocuments] = useState<UploadedDocument[]>(initialDocuments);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const handleFileUpload = async (files: FileList) => {
     setUploading(true);
@@ -84,10 +85,49 @@ export function DocumentsManager({
     void handleFileUpload(e.dataTransfer.files);
   };
 
+  const handleDeleteDocument = async (documentId: string) => {
+    setDeletingId(documentId);
+
+    try {
+      const response = await fetch(`/api/documents/${documentId}`, {
+        method: "DELETE",
+      });
+      const payload =
+        (await response.json()) as { success?: boolean; error?: string } | null;
+
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || "Could not delete document.");
+      }
+
+      setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
+
+      try {
+        const raw = window.localStorage.getItem("secondbrain-chat-store");
+
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          delete parsed[documentId];
+          window.localStorage.setItem(
+            "secondbrain-chat-store",
+            JSON.stringify(parsed),
+          );
+        }
+      } catch {}
+
+      toast.success("Document deleted.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not delete document.";
+      toast.error(message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-4xl font-bold text-gray-800 dark:text-white">
+        <h1 className="text-4xl font-bold text-gray-800 dark:text-[#f5f7fb]">
           Documents
         </h1>
         <button
@@ -107,10 +147,10 @@ export function DocumentsManager({
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={`mb-10 rounded-3xl border-2 border-dashed p-12 text-center transition-all ${isDragging ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30" : "border-gray-300 dark:border-gray-700"}`}
+        className={`mb-10 rounded-[2rem] border-2 border-dashed p-12 text-center transition-all ${isDragging ? "border-violet-500 bg-violet-50 dark:bg-[#31364c]" : "border-gray-300 bg-white/40 dark:border-[#40464f] dark:bg-[#2a2f36]/55"}`}
       >
-        <Upload className="mx-auto mb-4 h-12 w-12 text-gray-400" />
-        <p className="text-xl font-medium text-gray-600 dark:text-gray-300">
+        <Upload className="mx-auto mb-4 h-12 w-12 text-gray-400 dark:text-[#9ea6b3]" />
+        <p className="text-xl font-medium text-gray-600 dark:text-[#d7dbe3]">
           Drag and drop PDF, DOCX, TXT, or MD files here.
         </p>
         <input
@@ -124,7 +164,7 @@ export function DocumentsManager({
       </div>
 
       {documents.length === 0 ? (
-        <div className="py-16 text-center text-gray-400">
+        <div className="py-16 text-center text-gray-400 dark:text-[#a5adba]">
           No documents yet.
           <br />
           Upload your first file to get started.
@@ -134,13 +174,13 @@ export function DocumentsManager({
           {documents.map((doc) => (
             <div
               key={doc.id}
-              className="rounded-3xl border border-gray-200 bg-white p-6 transition hover:shadow-xl dark:border-gray-700 dark:bg-gray-900"
+              className="rounded-[1.75rem] border border-gray-200 bg-white p-6 transition hover:shadow-xl dark:border-[#3b414a] dark:bg-[#323840] dark:shadow-none"
             >
               <div className="flex items-start gap-4">
                 <FileText className="h-10 w-10 text-violet-500" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{doc.filename}</p>
-                  <p className="text-sm text-gray-400">
+                  <p className="truncate font-medium dark:text-[#f4f6fb]">{doc.filename}</p>
+                  <p className="text-sm text-gray-400 dark:text-[#aab2be]">
                     {doc.size ?? "Ready to chat"}
                   </p>
                 </div>
@@ -148,14 +188,16 @@ export function DocumentsManager({
               <div className="mt-6 flex gap-2">
                 <Link
                   href={`/chat?documentId=${doc.id}`}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gray-100 py-3 text-sm hover:bg-violet-100 dark:bg-gray-800"
+                  className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gray-100 py-3 text-sm transition hover:bg-violet-100 dark:bg-[#2a2f36] dark:text-[#edf1f8] dark:hover:bg-[#39404a]"
                 >
                   <MessageSquare className="h-4 w-4" />
                   Ask about this
                 </Link>
                 <button
                   type="button"
-                  className="rounded-2xl px-4 text-red-500 hover:bg-red-50"
+                  disabled={deletingId === doc.id}
+                  onClick={() => void handleDeleteDocument(doc.id)}
+                  className="rounded-2xl px-4 text-red-500 transition hover:bg-red-50 disabled:opacity-50 dark:hover:bg-[#41282d]"
                 >
                   <Trash2 className="h-5 w-5" />
                 </button>

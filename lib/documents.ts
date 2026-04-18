@@ -79,3 +79,44 @@ export async function listDocumentEmbeddings(documentId: string) {
 
   return (data ?? []) as DocumentEmbeddingRow[];
 }
+
+export async function deleteUserDocument(userId: string, documentId: string) {
+  const supabase = createSupabaseAdminClient();
+  const { data: document, error: fetchError } = await supabase
+    .from("documents")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("id", documentId)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw new Error(fetchError.message || "Could not find document.");
+  }
+
+  if (!document) {
+    return false;
+  }
+
+  const { error: embeddingError } = await supabase
+    .from("document_embeddings")
+    .delete()
+    .eq("document_id", documentId);
+
+  if (embeddingError) {
+    throw new Error(
+      embeddingError.message || "Could not delete document embeddings.",
+    );
+  }
+
+  const { error: documentError } = await supabase
+    .from("documents")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", documentId);
+
+  if (documentError) {
+    throw new Error(documentError.message || "Could not delete document.");
+  }
+
+  return true;
+}
