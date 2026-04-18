@@ -1,9 +1,16 @@
+// app/api/chat/route.ts
 import { currentUser } from "@clerk/nextjs/server";
 import { embed, generateText } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { getUserDocument, listDocumentEmbeddings } from "@/lib/documents";
+import {
+  createChatSession,
+  getChatSession,
+  saveMessage,
+  touchChatSession,
+} from "@/lib/sessions";
 
 type RequestBody = {
   documentId?: string;
@@ -21,39 +28,30 @@ function parseEmbedding(value: unknown) {
   if (Array.isArray(value)) {
     return value.filter((item): item is number => typeof item === "number");
   }
-
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
-
       if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is number => typeof item === "number");
+        return parsed.filter(
+          (item): item is number => typeof item === "number",
+        );
       }
     } catch {}
   }
-
   return [];
 }
 
 function cosineSimilarity(a: number[], b: number[]) {
-  if (!a.length || !b.length || a.length !== b.length) {
-    return -1;
-  }
-
+  if (!a.length || !b.length || a.length !== b.length) return -1;
   let dotProduct = 0;
   let magnitudeA = 0;
   let magnitudeB = 0;
-
   for (let index = 0; index < a.length; index += 1) {
     dotProduct += a[index] * b[index];
     magnitudeA += a[index] * a[index];
     magnitudeB += b[index] * b[index];
   }
-
-  if (!magnitudeA || !magnitudeB) {
-    return -1;
-  }
-
+  if (!magnitudeA || !magnitudeB) return -1;
   return dotProduct / (Math.sqrt(magnitudeA) * Math.sqrt(magnitudeB));
 }
 
@@ -73,21 +71,23 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   const user = await currentUser();
-
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let body: RequestBody;
-
   try {
     body = (await req.json()) as RequestBody;
   } catch {
-    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 },
+    );
   }
 
   const message = body.message?.trim();
   const documentId = body.documentId?.trim();
+  const incomingSessionId = body.sessionId?.trim();
 
   if (!documentId) {
     return NextResponse.json(
@@ -95,7 +95,6 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-
   if (!message) {
     return NextResponse.json(
       { error: "Ask a question first." },
@@ -104,12 +103,27 @@ export async function POST(req: NextRequest) {
   }
 
   const document = await getUserDocument(user.id, documentId);
-
   if (!document) {
     return NextResponse.json({ error: "Document not found." }, { status: 404 });
   }
 
   try {
+    // ── Resolve hoặc tạo session ──────────────────────────────
+    let sessionId = incomingSessionId ?? null;
+
+    if (sessionId) {
+      const existing = await getChatSession(user.id, sessionId);
+      if (!existing) sessionId = null;
+    }
+
+    if (!sessionId) {
+      const title = message.slice(0, 60);
+      const session = await createChatSession(user.id, documentId, title);
+      console.log("[chat] created session:", session?.id);
+      sessionId = session?.id ?? null;
+    }
+
+    // ── RAG ──────────────────────────────────────────────────
     const rows = await listDocumentEmbeddings(documentId);
     let citations: Array<{ index: number; snippet: string }> = [];
     let context = document.content.slice(0, 6000);
@@ -119,15 +133,12 @@ export async function POST(req: NextRequest) {
         model: getEmbeddingModel(),
         value: message,
       });
-
       const topChunks = rankChunks(rows, queryEmbedding);
-
       if (topChunks.length > 0) {
         citations = topChunks.map((chunk, index) => ({
           index: index + 1,
           snippet: chunk.content.slice(0, 280),
         }));
-
         context = topChunks
           .map((chunk, index) => `[${index + 1}] ${chunk.content}`)
           .join("\n\n");
@@ -135,39 +146,43 @@ export async function POST(req: NextRequest) {
     }
 
     if (citations.length === 0) {
-      citations = [
-        {
-          index: 1,
-          snippet: document.content.slice(0, 280),
-        },
-      ];
+      citations = [{ index: 1, snippet: document.content.slice(0, 280) }];
     }
 
     const { text } = await generateText({
       model: getChatModel(),
       system:
         "You answer questions using only the provided document context. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.",
-      prompt: `Document name: ${document.filename}
-
-Question:
-${message}
-
-Context:
-${context}`,
+      prompt: `Document name: ${document.filename}\n\nQuestion:\n${message}\n\nContext:\n${context}`,
     });
+
+    // ── Persist messages ──────────────────────────────────────
+    if (sessionId) {
+      const dbCitations = citations.map((c) => ({
+        filename: document.filename,
+        chunk_index: c.index,
+        content_preview: c.snippet,
+      }));
+
+      await Promise.all([
+        saveMessage(sessionId, "user", message),
+        saveMessage(sessionId, "assistant", text, dbCitations),
+        touchChatSession(sessionId),
+      ]);
+      console.log("[chat] saved messages for session:", sessionId);
+    }
 
     return NextResponse.json({
       answer: text,
       citations,
-      document: {
-        id: document.id,
-        filename: document.filename,
-      },
+      sessionId, // 👈 trả về client
+      document: { id: document.id, filename: document.filename },
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Could not answer this question.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
+    const msg =
+      error instanceof Error
+        ? error.message
+        : "Could not answer this question.";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

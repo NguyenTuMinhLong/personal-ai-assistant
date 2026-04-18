@@ -1,6 +1,18 @@
 // lib/sessions.ts
-import { supabaseClient } from "@/lib/supabase";
+import { createClient } from "@supabase/supabase-js";
+import { getSupabaseUrl } from "@/lib/supabase";
 import type { ChatSession, Message } from "@/types";
+
+// ✅ Dùng admin client giống lib/documents.ts
+function createSupabaseAdminClient() {
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseServiceRoleKey) {
+    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY.");
+  }
+  return createClient(getSupabaseUrl(), supabaseServiceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
 
 // ─── Sessions ────────────────────────────────────────────────
 
@@ -9,7 +21,8 @@ export async function createChatSession(
   documentId: string,
   title: string,
 ): Promise<ChatSession | null> {
-  const { data, error } = await supabaseClient
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
     .from("chat_sessions")
     .insert({ user_id: userId, document_id: documentId, title })
     .select()
@@ -27,7 +40,8 @@ export async function listChatSessions(
   userId: string,
   documentId?: string,
 ): Promise<ChatSession[]> {
-  let query = supabaseClient
+  const supabase = createSupabaseAdminClient();
+  let query = supabase
     .from("chat_sessions")
     .select("*")
     .eq("user_id", userId)
@@ -52,7 +66,8 @@ export async function getChatSession(
   userId: string,
   sessionId: string,
 ): Promise<ChatSession | null> {
-  const { data, error } = await supabaseClient
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
     .from("chat_sessions")
     .select("*")
     .eq("id", sessionId)
@@ -64,7 +79,8 @@ export async function getChatSession(
 }
 
 export async function touchChatSession(sessionId: string) {
-  await supabaseClient
+  const supabase = createSupabaseAdminClient();
+  await supabase
     .from("chat_sessions")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", sessionId);
@@ -78,7 +94,8 @@ export async function saveMessage(
   content: string,
   citations: Message["citations"] = [],
 ): Promise<Message | null> {
-  const { data, error } = await supabaseClient
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
     .from("messages")
     .insert({ session_id: sessionId, role, content, citations })
     .select()
@@ -93,7 +110,8 @@ export async function saveMessage(
 }
 
 export async function listMessages(sessionId: string): Promise<Message[]> {
-  const { data, error } = await supabaseClient
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
     .from("messages")
     .select("*")
     .eq("session_id", sessionId)

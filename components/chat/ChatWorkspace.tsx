@@ -1,3 +1,4 @@
+// components/chat/ChatWorkspace.tsx
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -35,22 +36,13 @@ type SavedNote = {
   highlightColor?: HighlightColor | null;
 };
 
-type DocumentChatState = {
-  messages: ChatMessage[];
-  notes: SavedNote[];
-};
-
 type ChatWorkspaceProps = {
   documents: StoredDocument[];
   initialDocumentId: string | null;
+  initialSessionId: string | null; // 👈 thêm
 };
 
-const CHAT_STORAGE_KEY = "secondbrain-chat-store";
-
-const HIGHLIGHT_OPTIONS: Array<{
-  color: HighlightColor;
-  swatch: string;
-}> = [
+const HIGHLIGHT_OPTIONS: Array<{ color: HighlightColor; swatch: string }> = [
   { color: "rose", swatch: "#fda4af" },
   { color: "amber", swatch: "#fcd34d" },
   { color: "emerald", swatch: "#6ee7b7" },
@@ -62,7 +54,6 @@ function createMessageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
-
   return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
@@ -77,7 +68,7 @@ function getHighlightClasses(color?: HighlightColor | null) {
     case "sky":
       return "border-sky-300 bg-sky-50 text-sky-950 dark:border-[#415764] dark:bg-[#303e48] dark:text-sky-50";
     case "violet":
-      return "border-violet-300 bg-violet-50 text-violet-950 dark:border-[#4e4a69] dark:bg-[#37344a] dark:text-violet-50";
+      return "border-violet-300 bg-violet-50 text-violet-950 dark:border-[#4e4a69] dark:bg-[#37334a] dark:text-violet-50";
     default:
       return "border-gray-200 bg-gray-50 text-gray-800 dark:border-[#3b414a] dark:bg-[#323840] dark:text-[#eef1f7]";
   }
@@ -86,233 +77,231 @@ function getHighlightClasses(color?: HighlightColor | null) {
 export function ChatWorkspace({
   documents,
   initialDocumentId,
+  initialSessionId,
 }: ChatWorkspaceProps) {
   const router = useRouter();
-  const hasLoadedChatStore = useRef(false);
+
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     initialDocumentId,
   );
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(
+    initialSessionId,
+  );
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [notes, setNotes] = useState<SavedNote[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [chatStore, setChatStore] = useState<Record<string, DocumentChatState>>(
-    {},
-  );
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const selectedDocument = useMemo(
     () => documents.find((doc) => doc.id === selectedDocumentId) ?? null,
     [documents, selectedDocumentId],
   );
 
-  const currentChatState = selectedDocumentId
-    ? chatStore[selectedDocumentId] ?? { messages: [], notes: [] }
-    : { messages: [], notes: [] };
+  // ── Load messages khi có sessionId ──────────────────────────
+  const loadedSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
-
-      if (!raw) {
-        hasLoadedChatStore.current = true;
-        return;
-      }
-
-      const parsed = JSON.parse(raw) as Record<string, DocumentChatState>;
-      setChatStore(parsed);
-    } catch {}
-    hasLoadedChatStore.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!hasLoadedChatStore.current) {
+    if (!initialSessionId || loadedSessionRef.current === initialSessionId) {
       return;
     }
 
-    try {
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatStore));
-    } catch {}
-  }, [chatStore]);
+    loadedSessionRef.current = initialSessionId;
+    setCurrentSessionId(initialSessionId);
 
+    async function fetchHistory() {
+      setLoadingHistory(true);
+      try {
+        const res = await fetch(
+          `/api/sessions/${initialSessionId}/messages`,
+        );
+        if (!res.ok) return;
+
+        const data = (await res.json()) as {
+          messages: Array<{
+            id: string;
+            role: "user" | "assistant";
+            content: string;
+            citations: Array<{
+              filename: string;
+              chunk_index: number;
+              content_preview: string;
+            }>;
+          }>;
+        };
+
+        // Convert DB messages → ChatMessage format
+        setMessages(
+          data.messages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            citations: m.citations?.map((c, i) => ({
+              index: i + 1,
+              snippet: c.content_preview,
+            })),
+          })),
+        );
+      } finally {
+        setLoadingHistory(false);
+      }
+    }
+
+    fetchHistory();
+  }, [initialSessionId]);
+
+  // ── Reset khi đổi document ────────────────────────────────
   useEffect(() => {
     setSelectedDocumentId(initialDocumentId);
   }, [initialDocumentId]);
 
+  // ── Sync URL ──────────────────────────────────────────────
   useEffect(() => {
-    if (selectedDocumentId) {
-      router.replace(`/chat?documentId=${selectedDocumentId}`, { scroll: false });
-      return;
-    }
-
-    router.replace("/chat", { scroll: false });
-  }, [router, selectedDocumentId]);
-
-  const updateCurrentDocumentState = (
-    updater: (state: DocumentChatState) => DocumentChatState,
-  ) => {
     if (!selectedDocumentId) {
+      router.replace("/chat", { scroll: false });
       return;
     }
 
-    setChatStore((prev) => {
-      const currentState = prev[selectedDocumentId] ?? {
-        messages: [],
-        notes: [],
-      };
+    const params = new URLSearchParams();
+    params.set("documentId", selectedDocumentId);
+    if (currentSessionId) params.set("sessionId", currentSessionId);
 
-      return {
-        ...prev,
-        [selectedDocumentId]: updater(currentState),
-      };
-    });
+    router.replace(`/chat?${params.toString()}`, { scroll: false });
+  }, [router, selectedDocumentId, currentSessionId]);
+
+  // ── Đổi document → reset messages + session ──────────────
+  const handleSelectDocument = (docId: string) => {
+    if (docId === selectedDocumentId) return;
+    setSelectedDocumentId(docId);
+    setCurrentSessionId(null);
+    setMessages([]);
+    setNotes([]);
+    loadedSessionRef.current = null;
   };
 
+  // ── Submit ────────────────────────────────────────────────
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-
     const trimmed = input.trim();
+    if (!trimmed || !selectedDocumentId) return;
 
-    if (!trimmed || !selectedDocumentId) {
-      return;
-    }
+    const userMsg: ChatMessage = {
+      id: createMessageId(),
+      role: "user",
+      content: trimmed,
+    };
 
-    updateCurrentDocumentState((state) => ({
-      ...state,
-      messages: [
-        ...state.messages,
-        {
-          id: createMessageId(),
-          role: "user",
-          content: trimmed,
-        },
-      ],
-    }));
+    setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setSending(true);
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           documentId: selectedDocumentId,
           message: trimmed,
+          sessionId: currentSessionId, // 👈 gửi sessionId nếu có
         }),
       });
 
-      const payload =
-        (await response.json()) as
-          | { answer?: string; citations?: Citation[]; error?: string }
-          | null;
+      const payload = (await response.json()) as {
+        answer?: string;
+        citations?: Citation[];
+        sessionId?: string; // 👈 nhận sessionId từ API
+        error?: string;
+      } | null;
 
       if (!response.ok || !payload?.answer) {
-        throw new Error(payload?.error || "Could not get an answer.");
+        throw new Error(payload?.error ?? "Could not get an answer.");
       }
 
-      updateCurrentDocumentState((state) => ({
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: createMessageId(),
-            role: "assistant",
-            content: payload.answer,
-            citations: payload.citations ?? [],
-          },
-        ],
-      }));
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Could not get an answer.";
+      // Lưu sessionId nếu là lần đầu
+      if (payload.sessionId && !currentSessionId) {
+        setCurrentSessionId(payload.sessionId);
+      }
 
-      updateCurrentDocumentState((state) => ({
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: createMessageId(),
-            role: "assistant",
-            content: message,
-          },
-        ],
-      }));
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content: payload.answer!,
+          citations: payload.citations ?? [],
+        },
+      ]);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : "Could not get an answer.";
+      setMessages((prev) => [
+        ...prev,
+        { id: createMessageId(), role: "assistant", content: msg },
+      ]);
     } finally {
       setSending(false);
     }
   };
 
+  // ── Highlight ─────────────────────────────────────────────
   const handleHighlightMessage = (
     messageId: string,
     highlightColor: HighlightColor,
   ) => {
-    updateCurrentDocumentState((state) => {
-      const nextMessages = state.messages.map((message) =>
-        message.id === messageId
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
           ? {
-              ...message,
+              ...m,
               highlightColor:
-                message.highlightColor === highlightColor ? null : highlightColor,
+                m.highlightColor === highlightColor ? null : highlightColor,
             }
-          : message,
-      );
-
-      const nextNotes = state.notes.map((note) =>
-        note.messageId === messageId
+          : m,
+      ),
+    );
+    setNotes((prev) =>
+      prev.map((n) =>
+        n.messageId === messageId
           ? {
-              ...note,
+              ...n,
               highlightColor:
-                nextMessages.find((message) => message.id === messageId)
-                  ?.highlightColor ?? null,
+                messages.find((m) => m.id === messageId)?.highlightColor ===
+                highlightColor
+                  ? null
+                  : highlightColor,
             }
-          : note,
-      );
-
-      return {
-        messages: nextMessages,
-        notes: nextNotes,
-      };
-    });
+          : n,
+      ),
+    );
   };
 
+  // ── Notes ─────────────────────────────────────────────────
   const handleToggleNote = (messageId: string) => {
-    updateCurrentDocumentState((state) => {
-      const message = state.messages.find((entry) => entry.id === messageId);
+    const message = messages.find((m) => m.id === messageId);
+    if (!message || message.role !== "assistant") return;
 
-      if (!message || message.role !== "assistant") {
-        return state;
-      }
+    const exists = notes.some((n) => n.messageId === messageId);
 
-      const existingNote = state.notes.find((note) => note.messageId === messageId);
-
-      if (existingNote) {
-        return {
-          ...state,
-          notes: state.notes.filter((note) => note.messageId !== messageId),
-        };
-      }
-
-      return {
-        ...state,
-        notes: [
-          {
-            id: createMessageId(),
-            messageId,
-            content: message.content,
-            highlightColor: message.highlightColor ?? null,
-          },
-          ...state.notes,
-        ],
-      };
-    });
+    if (exists) {
+      setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+    } else {
+      setNotes((prev) => [
+        {
+          id: createMessageId(),
+          messageId,
+          content: message.content,
+          highlightColor: message.highlightColor ?? null,
+        },
+        ...prev,
+      ]);
+    }
   };
 
   const handleDeleteNote = (noteId: string) => {
-    updateCurrentDocumentState((state) => ({
-      ...state,
-      notes: state.notes.filter((note) => note.id !== noteId),
-    }));
+    setNotes((prev) => prev.filter((n) => n.id !== noteId));
   };
 
+  // ── Render ────────────────────────────────────────────────
   if (documents.length === 0) {
     return (
       <div className="mx-auto flex max-w-3xl items-center justify-center rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center text-gray-500 dark:border-[#3b414a] dark:bg-[#323840] dark:text-[#aab2be]">
@@ -323,6 +312,7 @@ export function ChatWorkspace({
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+      {/* Sidebar */}
       <aside className="rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#2c3138]">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
           <MessageSquare className="h-4 w-4 text-violet-500" />
@@ -331,13 +321,16 @@ export function ChatWorkspace({
         <div className="space-y-2">
           {documents.map((doc) => {
             const isActive = doc.id === selectedDocumentId;
-
             return (
               <button
                 key={doc.id}
                 type="button"
-                onClick={() => setSelectedDocumentId(doc.id)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition ${isActive ? "border-violet-500 bg-violet-50 text-violet-900 dark:border-[#5960a4] dark:bg-[#39405a] dark:text-[#f4f5ff]" : "border-gray-200 hover:border-violet-200 hover:bg-gray-50 dark:border-[#3b414a] dark:text-[#d6dae3] dark:hover:bg-[#323840]"}`}
+                onClick={() => handleSelectDocument(doc.id)}
+                className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition ${
+                  isActive
+                    ? "border-violet-500 bg-violet-50 text-violet-900 dark:border-[#5960a4] dark:bg-[#39405a] dark:text-[#f4f5ff]"
+                    : "border-gray-200 hover:border-violet-200 hover:bg-gray-50 dark:border-[#3b414a] dark:text-[#d6dae3] dark:hover:bg-[#323840]"
+                }`}
               >
                 <p className="truncate font-medium">{doc.filename}</p>
                 <p className="mt-1 text-xs text-gray-400 dark:text-[#9ea6b3]">
@@ -348,18 +341,19 @@ export function ChatWorkspace({
           })}
         </div>
 
+        {/* Notes */}
         <div className="mt-6 border-t border-gray-100 pt-4 dark:border-[#3b414a]">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
             <BookmarkPlus className="h-4 w-4 text-violet-500" />
             Saved notes
           </div>
           <div className="space-y-2">
-            {currentChatState.notes.length === 0 ? (
+            {notes.length === 0 ? (
               <p className="rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-500 dark:bg-[#323840] dark:text-[#aab2be]">
                 Save an assistant reply to keep it here.
               </p>
             ) : (
-              currentChatState.notes.map((note) => (
+              notes.map((note) => (
                 <div
                   key={note.id}
                   className={`rounded-2xl border p-3 text-sm ${getHighlightClasses(note.highlightColor)}`}
@@ -383,6 +377,7 @@ export function ChatWorkspace({
         </div>
       </aside>
 
+      {/* Chat */}
       <section className="flex min-h-[70vh] flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#323840]">
         <div className="border-b border-gray-100 pb-4 dark:border-[#3b414a]">
           <p className="text-sm font-medium text-violet-600">Source chat</p>
@@ -396,7 +391,12 @@ export function ChatWorkspace({
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto py-6">
-          {currentChatState.messages.length === 0 ? (
+          {loadingHistory ? (
+            <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-[#aab2be]">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading chat history...
+            </div>
+          ) : messages.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-5 text-sm text-gray-500 dark:border-[#434954] dark:bg-[#2a2f36] dark:text-[#aab2be]">
               Try asking:
               <br />
@@ -407,10 +407,14 @@ export function ChatWorkspace({
               &quot;Explain this in simple terms&quot;
             </div>
           ) : (
-            currentChatState.messages.map((message) => (
+            messages.map((message) => (
               <div
                 key={message.id}
-                className={`rounded-2xl px-4 py-3 ${message.role === "user" ? "ml-auto max-w-[80%] bg-violet-600 text-white" : `max-w-[85%] border ${getHighlightClasses(message.highlightColor)}`}`}
+                className={`rounded-2xl px-4 py-3 ${
+                  message.role === "user"
+                    ? "ml-auto max-w-[80%] bg-violet-600 text-white"
+                    : `max-w-[85%] border ${getHighlightClasses(message.highlightColor)}`
+                }`}
               >
                 <p className="whitespace-pre-wrap text-sm leading-6">
                   {message.content}
@@ -441,7 +445,6 @@ export function ChatWorkspace({
                     <div className="flex items-center gap-2">
                       {HIGHLIGHT_OPTIONS.map((option) => {
                         const isActive = message.highlightColor === option.color;
-
                         return (
                           <button
                             key={option.color}
@@ -449,7 +452,11 @@ export function ChatWorkspace({
                             onClick={() =>
                               handleHighlightMessage(message.id, option.color)
                             }
-                            className={`h-5 w-5 rounded-full border transition ${isActive ? "scale-110 border-gray-900 dark:border-white" : "border-white/70"}`}
+                            className={`h-5 w-5 rounded-full border transition ${
+                              isActive
+                                ? "scale-110 border-gray-900 dark:border-white"
+                                : "border-white/70"
+                            }`}
                             style={{ backgroundColor: option.swatch }}
                             aria-label={`Highlight ${option.color}`}
                           />
@@ -461,9 +468,7 @@ export function ChatWorkspace({
                       onClick={() => handleToggleNote(message.id)}
                       className="rounded-xl border border-gray-200 px-3 py-1.5 text-gray-600 transition hover:border-violet-300 hover:text-violet-700 dark:border-[#48505a] dark:text-[#dce2ec] dark:hover:border-[#6670ff] dark:hover:text-white"
                     >
-                      {currentChatState.notes.some(
-                        (note) => note.messageId === message.id,
-                      )
+                      {notes.some((n) => n.messageId === message.id)
                         ? "Saved"
                         : "Save note"}
                     </button>
@@ -483,7 +488,7 @@ export function ChatWorkspace({
         <form onSubmit={handleSubmit} className="mt-auto flex gap-3 pt-4">
           <input
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(e) => setInput(e.target.value)}
             placeholder={
               selectedDocument
                 ? `Ask about ${selectedDocument.filename}`
