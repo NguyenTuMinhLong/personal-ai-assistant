@@ -124,3 +124,23 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
 
   return (data ?? []) as Message[];
 }
+
+export async function getSessionMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<Message | null> {
+  const supabase = createSupabaseAdminClient();
+
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("id", messageId)
+    .eq("session_id", sessionId)
+    .maybeSingle();
+
+  if (error) {
+    return null;
+  }
+
+  return (data as Message | null) ?? null;
+}

@@ -1,4 +1,3 @@
-// components/chat/ChatWorkspace.tsx
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +10,7 @@ import {
   SendHorizonal,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import type { StoredDocument } from "@/lib/documents";
 
@@ -36,10 +36,17 @@ type SavedNote = {
   highlightColor?: HighlightColor | null;
 };
 
+type PersistedAnnotation = {
+  id: string;
+  message_id: string;
+  note_content: string | null;
+  highlight_color: HighlightColor | null;
+};
+
 type ChatWorkspaceProps = {
   documents: StoredDocument[];
   initialDocumentId: string | null;
-  initialSessionId: string | null; // 👈 thêm
+  initialSessionId: string | null;
 };
 
 const HIGHLIGHT_OPTIONS: Array<{ color: HighlightColor; swatch: string }> = [
@@ -54,6 +61,7 @@ function createMessageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
+
   return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
@@ -72,6 +80,17 @@ function getHighlightClasses(color?: HighlightColor | null) {
     default:
       return "border-gray-200 bg-gray-50 text-gray-800 dark:border-[#3b414a] dark:bg-[#323840] dark:text-[#eef1f7]";
   }
+}
+
+function buildNotesFromAnnotations(annotations: PersistedAnnotation[]) {
+  return annotations
+    .filter((annotation) => annotation.note_content)
+    .map((annotation) => ({
+      id: annotation.id,
+      messageId: annotation.message_id,
+      content: annotation.note_content ?? "",
+      highlightColor: annotation.highlight_color,
+    }));
 }
 
 export function ChatWorkspace({
@@ -98,7 +117,6 @@ export function ChatWorkspace({
     [documents, selectedDocumentId],
   );
 
-  // ── Load messages khi có sessionId ──────────────────────────
   const loadedSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -111,11 +129,13 @@ export function ChatWorkspace({
 
     async function fetchHistory() {
       setLoadingHistory(true);
+
       try {
-        const res = await fetch(
-          `/api/sessions/${initialSessionId}/messages`,
-        );
-        if (!res.ok) return;
+        const res = await fetch(`/api/sessions/${initialSessionId}/messages`);
+
+        if (!res.ok) {
+          return;
+        }
 
         const data = (await res.json()) as {
           messages: Array<{
@@ -128,34 +148,46 @@ export function ChatWorkspace({
               content_preview: string;
             }>;
           }>;
+          annotations: PersistedAnnotation[];
         };
 
-        // Convert DB messages → ChatMessage format
-        setMessages(
-          data.messages.map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            citations: m.citations?.map((c, i) => ({
-              index: i + 1,
-              snippet: c.content_preview,
-            })),
-          })),
+        const annotationMap = new Map(
+          (data.annotations ?? []).map((annotation) => [
+            annotation.message_id,
+            annotation,
+          ]),
         );
+
+        setMessages(
+          data.messages.map((message) => {
+            const annotation = annotationMap.get(message.id);
+
+            return {
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              citations: message.citations?.map((citation, index) => ({
+                index: index + 1,
+                snippet: citation.content_preview,
+              })),
+              highlightColor: annotation?.highlight_color ?? null,
+            };
+          }),
+        );
+
+        setNotes(buildNotesFromAnnotations(data.annotations ?? []));
       } finally {
         setLoadingHistory(false);
       }
     }
 
-    fetchHistory();
+    void fetchHistory();
   }, [initialSessionId]);
 
-  // ── Reset khi đổi document ────────────────────────────────
   useEffect(() => {
     setSelectedDocumentId(initialDocumentId);
   }, [initialDocumentId]);
 
-  // ── Sync URL ──────────────────────────────────────────────
   useEffect(() => {
     if (!selectedDocumentId) {
       router.replace("/chat", { scroll: false });
@@ -164,14 +196,19 @@ export function ChatWorkspace({
 
     const params = new URLSearchParams();
     params.set("documentId", selectedDocumentId);
-    if (currentSessionId) params.set("sessionId", currentSessionId);
+
+    if (currentSessionId) {
+      params.set("sessionId", currentSessionId);
+    }
 
     router.replace(`/chat?${params.toString()}`, { scroll: false });
   }, [router, selectedDocumentId, currentSessionId]);
 
-  // ── Đổi document → reset messages + session ──────────────
   const handleSelectDocument = (docId: string) => {
-    if (docId === selectedDocumentId) return;
+    if (docId === selectedDocumentId) {
+      return;
+    }
+
     setSelectedDocumentId(docId);
     setCurrentSessionId(null);
     setMessages([]);
@@ -179,111 +216,187 @@ export function ChatWorkspace({
     loadedSessionRef.current = null;
   };
 
-  // ── Submit ────────────────────────────────────────────────
+  const persistAnnotation = async (input: {
+    messageId: string;
+    noteContent: string | null;
+    highlightColor: HighlightColor | null;
+  }) => {
+    if (!currentSessionId) {
+      toast.error("Session is not ready yet.");
+      return;
+    }
+
+    const res = await fetch("/api/annotations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId: currentSessionId,
+        messageId: input.messageId,
+        noteContent: input.noteContent,
+        highlightColor: input.highlightColor,
+      }),
+    });
+
+    const payload = (await res.json()) as {
+      success?: boolean;
+      error?: string;
+    } | null;
+
+    if (!res.ok || !payload?.success) {
+      throw new Error(payload?.error || "Could not save annotation.");
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || !selectedDocumentId) return;
 
-    const userMsg: ChatMessage = {
+    const trimmed = input.trim();
+
+    if (!trimmed || !selectedDocumentId) {
+      return;
+    }
+
+    const userMessage: ChatMessage = {
       id: createMessageId(),
       role: "user",
       content: trimmed,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setSending(true);
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           documentId: selectedDocumentId,
           message: trimmed,
-          sessionId: currentSessionId, // 👈 gửi sessionId nếu có
+          sessionId: currentSessionId,
         }),
       });
 
-      const payload = (await response.json()) as {
-        answer?: string;
-        citations?: Citation[];
-        sessionId?: string; // 👈 nhận sessionId từ API
-        error?: string;
-      } | null;
+      const payload = (await response.json()) as
+        | {
+            answer?: string;
+            citations?: Citation[];
+            sessionId?: string;
+            assistantMessageId?: string | null;
+            error?: string;
+          }
+        | null;
 
       if (!response.ok || !payload?.answer) {
-        throw new Error(payload?.error ?? "Could not get an answer.");
+        throw new Error(payload?.error || "Could not get an answer.");
       }
 
-      // Lưu sessionId nếu là lần đầu
-      if (payload.sessionId && !currentSessionId) {
-        setCurrentSessionId(payload.sessionId);
+      const answer = payload.answer;
+      const citations = payload.citations ?? [];
+      const assistantMessageId = payload.assistantMessageId ?? createMessageId();
+      const nextSessionId = payload.sessionId ?? null;
+
+      if (nextSessionId && !currentSessionId) {
+        setCurrentSessionId(nextSessionId);
       }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          content: answer,
+          citations,
+          highlightColor: null,
+        },
+      ]);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not get an answer.";
 
       setMessages((prev) => [
         ...prev,
         {
           id: createMessageId(),
           role: "assistant",
-          content: payload.answer!,
-          citations: payload.citations ?? [],
+          content: errorMessage,
         },
-      ]);
-    } catch (error) {
-      const msg =
-        error instanceof Error ? error.message : "Could not get an answer.";
-      setMessages((prev) => [
-        ...prev,
-        { id: createMessageId(), role: "assistant", content: msg },
       ]);
     } finally {
       setSending(false);
     }
   };
 
-  // ── Highlight ─────────────────────────────────────────────
-  const handleHighlightMessage = (
+  const handleHighlightMessage = async (
     messageId: string,
     highlightColor: HighlightColor,
   ) => {
+    const prevMessages = messages;
+    const prevNotes = notes;
+
+    const targetMessage = messages.find((message) => message.id === messageId);
+
+    if (!targetMessage || targetMessage.role !== "assistant") {
+      return;
+    }
+
+    const nextHighlightColor =
+      targetMessage.highlightColor === highlightColor ? null : highlightColor;
+
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId
-          ? {
-              ...m,
-              highlightColor:
-                m.highlightColor === highlightColor ? null : highlightColor,
-            }
-          : m,
+      prev.map((message) =>
+        message.id === messageId
+          ? { ...message, highlightColor: nextHighlightColor }
+          : message,
       ),
     );
+
     setNotes((prev) =>
-      prev.map((n) =>
-        n.messageId === messageId
-          ? {
-              ...n,
-              highlightColor:
-                messages.find((m) => m.id === messageId)?.highlightColor ===
-                highlightColor
-                  ? null
-                  : highlightColor,
-            }
-          : n,
+      prev.map((note) =>
+        note.messageId === messageId
+          ? { ...note, highlightColor: nextHighlightColor }
+          : note,
       ),
     );
+
+    const existingNote = notes.find((note) => note.messageId === messageId);
+
+    try {
+      await persistAnnotation({
+        messageId,
+        noteContent: existingNote?.content ?? null,
+        highlightColor: nextHighlightColor,
+      });
+    } catch (error) {
+      setMessages(prevMessages);
+      setNotes(prevNotes);
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not save highlight.";
+
+      toast.error(errorMessage);
+    }
   };
 
-  // ── Notes ─────────────────────────────────────────────────
-  const handleToggleNote = (messageId: string) => {
-    const message = messages.find((m) => m.id === messageId);
-    if (!message || message.role !== "assistant") return;
+  const handleToggleNote = async (messageId: string) => {
+    const prevMessages = messages;
+    const prevNotes = notes;
 
-    const exists = notes.some((n) => n.messageId === messageId);
+    const message = messages.find((entry) => entry.id === messageId);
 
-    if (exists) {
-      setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+    if (!message || message.role !== "assistant") {
+      return;
+    }
+
+    const existingNote = notes.find((note) => note.messageId === messageId);
+    const nextNoteContent = existingNote ? null : message.content;
+
+    if (existingNote) {
+      setNotes((prev) => prev.filter((note) => note.messageId !== messageId));
     } else {
       setNotes((prev) => [
         {
@@ -295,13 +408,53 @@ export function ChatWorkspace({
         ...prev,
       ]);
     }
+
+    try {
+      await persistAnnotation({
+        messageId,
+        noteContent: nextNoteContent,
+        highlightColor: message.highlightColor ?? null,
+      });
+    } catch (error) {
+      setMessages(prevMessages);
+      setNotes(prevNotes);
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not save note.";
+
+      toast.error(errorMessage);
+    }
   };
 
-  const handleDeleteNote = (noteId: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== noteId));
+  const handleDeleteNote = async (noteId: string) => {
+    const prevNotes = notes;
+
+    const note = notes.find((item) => item.id === noteId);
+
+    if (!note) {
+      return;
+    }
+
+    const message = messages.find((item) => item.id === note.messageId);
+
+    setNotes((prev) => prev.filter((item) => item.id !== noteId));
+
+    try {
+      await persistAnnotation({
+        messageId: note.messageId,
+        noteContent: null,
+        highlightColor: message?.highlightColor ?? null,
+      });
+    } catch (error) {
+      setNotes(prevNotes);
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not delete note.";
+
+      toast.error(errorMessage);
+    }
   };
 
-  // ── Render ────────────────────────────────────────────────
   if (documents.length === 0) {
     return (
       <div className="mx-auto flex max-w-3xl items-center justify-center rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center text-gray-500 dark:border-[#3b414a] dark:bg-[#323840] dark:text-[#aab2be]">
@@ -312,15 +465,16 @@ export function ChatWorkspace({
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      {/* Sidebar */}
       <aside className="rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#2c3138]">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
           <MessageSquare className="h-4 w-4 text-violet-500" />
           Your documents
         </div>
+
         <div className="space-y-2">
           {documents.map((doc) => {
             const isActive = doc.id === selectedDocumentId;
+
             return (
               <button
                 key={doc.id}
@@ -341,12 +495,12 @@ export function ChatWorkspace({
           })}
         </div>
 
-        {/* Notes */}
         <div className="mt-6 border-t border-gray-100 pt-4 dark:border-[#3b414a]">
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
             <BookmarkPlus className="h-4 w-4 text-violet-500" />
             Saved notes
           </div>
+
           <div className="space-y-2">
             {notes.length === 0 ? (
               <p className="rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-500 dark:bg-[#323840] dark:text-[#aab2be]">
@@ -362,9 +516,10 @@ export function ChatWorkspace({
                     <p className="line-clamp-4 whitespace-pre-wrap">
                       {note.content}
                     </p>
+
                     <button
                       type="button"
-                      onClick={() => handleDeleteNote(note.id)}
+                      onClick={() => void handleDeleteNote(note.id)}
                       className="shrink-0 rounded-xl p-2 text-gray-400 transition hover:bg-white/60 hover:text-red-500 dark:hover:bg-[#25292f]"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -377,7 +532,6 @@ export function ChatWorkspace({
         </div>
       </aside>
 
-      {/* Chat */}
       <section className="flex min-h-[70vh] flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#323840]">
         <div className="border-b border-gray-100 pb-4 dark:border-[#3b414a]">
           <p className="text-sm font-medium text-violet-600">Source chat</p>
@@ -419,6 +573,7 @@ export function ChatWorkspace({
                 <p className="whitespace-pre-wrap text-sm leading-6">
                   {message.content}
                 </p>
+
                 {message.citations?.length ? (
                   <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-[#434954] dark:text-[#aab2be]">
                     {message.citations.map((citation) => (
@@ -436,21 +591,27 @@ export function ChatWorkspace({
                     ))}
                   </div>
                 ) : null}
+
                 {message.role === "assistant" ? (
                   <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs dark:border-[#434954]">
                     <div className="flex items-center gap-2 text-gray-500 dark:text-[#aab2be]">
                       <Highlighter className="h-3.5 w-3.5" />
                       Highlight
                     </div>
+
                     <div className="flex items-center gap-2">
                       {HIGHLIGHT_OPTIONS.map((option) => {
                         const isActive = message.highlightColor === option.color;
+
                         return (
                           <button
                             key={option.color}
                             type="button"
                             onClick={() =>
-                              handleHighlightMessage(message.id, option.color)
+                              void handleHighlightMessage(
+                                message.id,
+                                option.color,
+                              )
                             }
                             className={`h-5 w-5 rounded-full border transition ${
                               isActive
@@ -463,12 +624,13 @@ export function ChatWorkspace({
                         );
                       })}
                     </div>
+
                     <button
                       type="button"
-                      onClick={() => handleToggleNote(message.id)}
+                      onClick={() => void handleToggleNote(message.id)}
                       className="rounded-xl border border-gray-200 px-3 py-1.5 text-gray-600 transition hover:border-violet-300 hover:text-violet-700 dark:border-[#48505a] dark:text-[#dce2ec] dark:hover:border-[#6670ff] dark:hover:text-white"
                     >
-                      {notes.some((n) => n.messageId === message.id)
+                      {notes.some((note) => note.messageId === message.id)
                         ? "Saved"
                         : "Save note"}
                     </button>
@@ -477,6 +639,7 @@ export function ChatWorkspace({
               </div>
             ))
           )}
+
           {sending ? (
             <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-[#aab2be]">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -497,6 +660,7 @@ export function ChatWorkspace({
             disabled={!selectedDocument || sending}
             className="flex-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-violet-500 dark:border-[#48505a] dark:bg-[#2a2f36] dark:text-[#f1f4fa] dark:placeholder:text-[#8e97a5]"
           />
+
           <button
             type="submit"
             disabled={!selectedDocument || sending || !input.trim()}
