@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Upload, FileText, Trash2, MessageSquare } from "lucide-react";
+import { FileText, MessageSquare, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import type { StoredDocument } from "@/lib/documents";
@@ -25,7 +25,8 @@ type DocumentsManagerProps = {
 export function DocumentsManager({
   initialDocuments,
 }: DocumentsManagerProps) {
-  const [documents, setDocuments] = useState<UploadedDocument[]>(initialDocuments);
+  const [documents, setDocuments] =
+    useState<UploadedDocument[]>(initialDocuments);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function DocumentsManager({
   const handleFileUpload = async (files: FileList) => {
     setUploading(true);
     const formData = new FormData();
+
     Array.from(files).forEach((file) => formData.append("files", file));
 
     try {
@@ -92,6 +94,7 @@ export function DocumentsManager({
       const response = await fetch(`/api/documents/${documentId}`, {
         method: "DELETE",
       });
+
       const payload =
         (await response.json()) as { success?: boolean; error?: string } | null;
 
@@ -100,20 +103,6 @@ export function DocumentsManager({
       }
 
       setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
-
-      try {
-        const raw = window.localStorage.getItem("secondbrain-chat-store");
-
-        if (raw) {
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          delete parsed[documentId];
-          window.localStorage.setItem(
-            "secondbrain-chat-store",
-            JSON.stringify(parsed),
-          );
-        }
-      } catch {}
-
       toast.success("Document deleted.");
     } catch (error) {
       const message =
@@ -130,6 +119,7 @@ export function DocumentsManager({
         <h1 className="text-4xl font-bold text-gray-800 dark:text-[#f5f7fb]">
           Documents
         </h1>
+
         <button
           disabled={uploading}
           onClick={() => document.getElementById("file-upload")?.click()}
@@ -147,19 +137,27 @@ export function DocumentsManager({
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={`mb-10 rounded-[2rem] border-2 border-dashed p-12 text-center transition-all ${isDragging ? "border-violet-500 bg-violet-50 dark:bg-[#31364c]" : "border-gray-300 bg-white/40 dark:border-[#40464f] dark:bg-[#2a2f36]/55"}`}
+        className={`mb-10 rounded-[2rem] border-2 border-dashed p-12 text-center transition-all ${
+          isDragging
+            ? "border-violet-500 bg-violet-50 dark:bg-[#31364c]"
+            : "border-gray-300 bg-white/40 dark:border-[#40464f] dark:bg-[#2a2f36]/55"
+        }`}
       >
         <Upload className="mx-auto mb-4 h-12 w-12 text-gray-400 dark:text-[#9ea6b3]" />
+
         <p className="text-xl font-medium text-gray-600 dark:text-[#d7dbe3]">
           Drag and drop PDF, DOCX, TXT, or MD files here.
         </p>
+
         <input
           id="file-upload"
           type="file"
           multiple
           accept=".pdf,.docx,.txt,.md"
           className="hidden"
-          onChange={(e) => e.target.files && void handleFileUpload(e.target.files)}
+          onChange={(e) =>
+            e.target.files && void handleFileUpload(e.target.files)
+          }
         />
       </div>
 
@@ -177,22 +175,44 @@ export function DocumentsManager({
               className="rounded-[1.75rem] border border-gray-200 bg-white p-6 transition hover:shadow-xl dark:border-[#3b414a] dark:bg-[#323840] dark:shadow-none"
             >
               <div className="flex items-start gap-4">
-                <FileText className="h-10 w-10 text-violet-500" />
+                <FileText className="h-10 w-10 shrink-0 text-violet-500" />
+
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium dark:text-[#f4f6fb]">{doc.filename}</p>
+                  <p className="truncate font-medium dark:text-[#f4f6fb]">
+                    {doc.filename}
+                  </p>
+
                   <p className="text-sm text-gray-400 dark:text-[#aab2be]">
                     {doc.size ?? "Ready to chat"}
                   </p>
                 </div>
               </div>
+
+              <div className="mt-4 rounded-2xl bg-gray-50 p-4 dark:bg-[#2a2f36]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
+                  AI Summary
+                </p>
+
+                {doc.summary ? (
+                  <p className="mt-2 line-clamp-5 text-sm leading-6 text-gray-600 dark:text-[#c8d0dc]">
+                    {doc.summary}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-sm text-gray-400 dark:text-[#8e97a5]">
+                    No summary yet.
+                  </p>
+                )}
+              </div>
+
               <div className="mt-6 flex gap-2">
                 <Link
                   href={`/chat?documentId=${doc.id}`}
                   className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gray-100 py-3 text-sm transition hover:bg-violet-100 dark:bg-[#2a2f36] dark:text-[#edf1f8] dark:hover:bg-[#39404a]"
                 >
                   <MessageSquare className="h-4 w-4" />
-                  Ask about this
+                  Ask questions
                 </Link>
+
                 <button
                   type="button"
                   disabled={deletingId === doc.id}

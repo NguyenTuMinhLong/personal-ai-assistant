@@ -1,16 +1,15 @@
-// lib/documents.ts
-
 import { createClient } from "@supabase/supabase-js";
+
 import { getSupabaseUrl } from "@/lib/supabase";
 
 export type StoredDocument = {
   id: string;
   filename: string;
+  summary?: string | null;
 };
 
 export type StoredDocumentWithContent = StoredDocument & {
   content: string;
-  summary?: string; // 👈 thêm
 };
 
 type DocumentEmbeddingRow = {
@@ -38,8 +37,9 @@ export async function listUserDocuments(userId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
-    .select("id, filename")
-    .eq("user_id", userId);
+    .select("id, filename, summary")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
 
   if (error) {
     throw new Error(error.message || "Could not load documents.");
@@ -52,7 +52,7 @@ export async function getUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
-    .select("id, filename, content, summary") // 👈 thêm summary
+    .select("id, filename, content, summary")
     .eq("user_id", userId)
     .eq("id", documentId)
     .maybeSingle();

@@ -1,13 +1,23 @@
-import { NextRequest, NextResponse } from "next/server";
 import { currentUser } from "@clerk/nextjs/server";
 import { createClient } from "@supabase/supabase-js";
-import { embed } from "ai";
+import { embed, generateText } from "ai";
+import { NextRequest, NextResponse } from "next/server";
 
-import { getEmbeddingModel } from "@/lib/ai";
+import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { getSupabaseUrl } from "@/lib/supabase";
 
-type UploadResult = { id: string; filename: string; size: string };
-type UploadFailure = { filename: string; error: string };
+type UploadResult = {
+  id: string;
+  filename: string;
+  size: string;
+  summary?: string | null;
+};
+
+type UploadFailure = {
+  filename: string;
+  error: string;
+};
+
 type SupabaseLikeError = {
   code?: string;
   message?: string;
@@ -25,7 +35,9 @@ function isDocxFile(file: File) {
 }
 
 function formatSupabaseError(error: SupabaseLikeError, supabaseUrl: string) {
-  const details = `${error.message ?? ""}\n${error.details ?? ""}\n${error.hint ?? ""}`;
+  const details = `${error.message ?? ""}\n${error.details ?? ""}\n${
+    error.hint ?? ""
+  }`;
   const host = new URL(supabaseUrl).host;
 
   if (details.includes("ENOTFOUND")) {
@@ -66,6 +78,23 @@ async function extractText(file: File) {
   }
 
   return "";
+}
+
+async function generateDocumentSummary(content: string) {
+  const prompt = content.slice(0, 8000).trim();
+
+  if (!prompt) {
+    return null;
+  }
+
+  const { text } = await generateText({
+    model: getChatModel(),
+    system:
+      "You are a document summarizer. Summarize the document in 3-5 concise sentences. Focus on the main topic, key points, and purpose. Match the language of the document.",
+    prompt,
+  });
+
+  return text.trim() || null;
 }
 
 export async function POST(req: NextRequest) {
@@ -118,6 +147,7 @@ export async function POST(req: NextRequest) {
       persistSession: false,
     },
   });
+
   const results: UploadResult[] = [];
   const failures: UploadFailure[] = [];
 
@@ -189,15 +219,38 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      let summary: string | null = null;
+
+      try {
+        summary = await generateDocumentSummary(text);
+
+        if (summary) {
+          const { error: summaryError } = await supabase
+            .from("documents")
+            .update({ summary })
+            .eq("id", doc.id)
+            .eq("user_id", user.id);
+
+          if (summaryError) {
+            console.error("Summary update error:", summaryError);
+          }
+        }
+      } catch (summaryError) {
+        console.error("Summary generation error:", file.name, summaryError);
+      }
+
       results.push({
         id: doc.id,
         filename: file.name,
         size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
+        summary,
       });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unexpected upload error";
+
       console.error("Upload error:", file.name, message);
+
       failures.push({
         filename: file.name,
         error: message,

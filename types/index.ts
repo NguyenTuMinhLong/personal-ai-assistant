@@ -4,7 +4,7 @@ export type Document = {
   user_id: string;
   filename: string;
   content: string;
-  summary?: string;
+  summary?: string | null;
   metadata: {
     size?: number;
     pageCount?: number;
