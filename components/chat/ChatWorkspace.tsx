@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowDown,
   BookmarkPlus,
   Highlighter,
   Loader2,
@@ -27,6 +28,8 @@ type ChatMessage = {
   content: string;
   citations?: Citation[];
   highlightColor?: HighlightColor | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
 };
 
 type SavedNote = {
@@ -34,6 +37,8 @@ type SavedNote = {
   messageId: string;
   content: string;
   highlightColor?: HighlightColor | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
 };
 
 type PersistedAnnotation = {
@@ -41,6 +46,15 @@ type PersistedAnnotation = {
   message_id: string;
   note_content: string | null;
   highlight_color: HighlightColor | null;
+  selection_start: number | null;
+  selection_end: number | null;
+};
+
+type SelectedExcerpt = {
+  messageId: string;
+  text: string;
+  start: number;
+  end: number;
 };
 
 type ChatWorkspaceProps = {
@@ -90,7 +104,38 @@ function buildNotesFromAnnotations(annotations: PersistedAnnotation[]) {
       messageId: annotation.message_id,
       content: annotation.note_content ?? "",
       highlightColor: annotation.highlight_color,
+      selectionStart: annotation.selection_start,
+      selectionEnd: annotation.selection_end,
     }));
+}
+
+function renderMessageContent(message: ChatMessage) {
+  const start = message.selectionStart ?? null;
+  const end = message.selectionEnd ?? null;
+
+  if (
+    start === null ||
+    end === null ||
+    start < 0 ||
+    end <= start ||
+    end > message.content.length
+  ) {
+    return message.content;
+  }
+
+  const before = message.content.slice(0, start);
+  const selected = message.content.slice(start, end);
+  const after = message.content.slice(end);
+
+  return (
+    <>
+      {before}
+      <mark className="rounded bg-violet-300/50 px-1 text-inherit dark:bg-violet-400/30">
+        {selected}
+      </mark>
+      {after}
+    </>
+  );
 }
 
 export function ChatWorkspace({
@@ -111,6 +156,11 @@ export function ChatWorkspace({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [selectedExcerpt, setSelectedExcerpt] = useState<SelectedExcerpt | null>(
+    null,
+  );
+  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
 
   const selectedDocument = useMemo(
     () => documents.find((doc) => doc.id === selectedDocumentId) ?? null,
@@ -118,6 +168,119 @@ export function ChatWorkspace({
   );
 
   const loadedSessionRef = useRef<string | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const contentRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const updateScrollState = () => {
+    const container = scrollContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nearBottom = distanceFromBottom < 120;
+
+    shouldStickToBottomRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom);
+  };
+
+  const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
+    const container = scrollContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+  };
+
+  const clearBrowserSelection = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const selection = window.getSelection();
+
+    if (selection) {
+      selection.removeAllRanges();
+    }
+  };
+
+  const jumpToMessage = (messageId: string) => {
+    const element = messageRefs.current[messageId];
+
+    if (!element) {
+      return;
+    }
+
+    element.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    setFlashedMessageId(messageId);
+
+    if (flashTimeoutRef.current) {
+      clearTimeout(flashTimeoutRef.current);
+    }
+
+    flashTimeoutRef.current = setTimeout(() => {
+      setFlashedMessageId((current) =>
+        current === messageId ? null : current,
+      );
+    }, 1800);
+  };
+
+  const captureSelectedText = (messageId: string) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const contentElement = contentRefs.current[messageId];
+    const text = selection?.toString().trim() ?? "";
+
+    if (!contentElement || !selection || selection.rangeCount === 0 || !text) {
+      if (selectedExcerpt?.messageId === messageId) {
+        setSelectedExcerpt(null);
+      }
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const commonNode = range.commonAncestorContainer;
+
+    if (!contentElement.contains(commonNode)) {
+      return;
+    }
+
+    const prefixRange = range.cloneRange();
+    prefixRange.selectNodeContents(contentElement);
+    prefixRange.setEnd(range.startContainer, range.startOffset);
+
+    const start = prefixRange.toString().length;
+    const end = start + selection.toString().length;
+
+    if (end <= start) {
+      setSelectedExcerpt(null);
+      return;
+    }
+
+    setSelectedExcerpt({
+      messageId,
+      text,
+      start,
+      end,
+    });
+  };
 
   useEffect(() => {
     if (!initialSessionId || loadedSessionRef.current === initialSessionId) {
@@ -171,11 +334,19 @@ export function ChatWorkspace({
                 snippet: citation.content_preview,
               })),
               highlightColor: annotation?.highlight_color ?? null,
+              selectionStart: annotation?.selection_start ?? null,
+              selectionEnd: annotation?.selection_end ?? null,
             };
           }),
         );
 
         setNotes(buildNotesFromAnnotations(data.annotations ?? []));
+        setSelectedExcerpt(null);
+
+        requestAnimationFrame(() => {
+          scrollToLatest("auto");
+          updateScrollState();
+        });
       } finally {
         setLoadingHistory(false);
       }
@@ -204,6 +375,24 @@ export function ChatWorkspace({
     router.replace(`/chat?${params.toString()}`, { scroll: false });
   }, [router, selectedDocumentId, currentSessionId]);
 
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      if (shouldStickToBottomRef.current) {
+        scrollToLatest("smooth");
+      } else {
+        updateScrollState();
+      }
+    });
+  }, [messages, sending]);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleSelectDocument = (docId: string) => {
     if (docId === selectedDocumentId) {
       return;
@@ -213,6 +402,8 @@ export function ChatWorkspace({
     setCurrentSessionId(null);
     setMessages([]);
     setNotes([]);
+    setSelectedExcerpt(null);
+    setFlashedMessageId(null);
     loadedSessionRef.current = null;
   };
 
@@ -220,6 +411,8 @@ export function ChatWorkspace({
     messageId: string;
     noteContent: string | null;
     highlightColor: HighlightColor | null;
+    selectionStart: number | null;
+    selectionEnd: number | null;
   }) => {
     if (!currentSessionId) {
       toast.error("Session is not ready yet.");
@@ -236,6 +429,8 @@ export function ChatWorkspace({
         messageId: input.messageId,
         noteContent: input.noteContent,
         highlightColor: input.highlightColor,
+        selectionStart: input.selectionStart,
+        selectionEnd: input.selectionEnd,
       }),
     });
 
@@ -264,6 +459,7 @@ export function ChatWorkspace({
       content: trimmed,
     };
 
+    shouldStickToBottomRef.current = true;
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setSending(true);
@@ -287,6 +483,7 @@ export function ChatWorkspace({
             citations?: Citation[];
             sessionId?: string;
             assistantMessageId?: string | null;
+            reused?: boolean;
             error?: string;
           }
         | null;
@@ -312,8 +509,14 @@ export function ChatWorkspace({
           content: answer,
           citations,
           highlightColor: null,
+          selectionStart: null,
+          selectionEnd: null,
         },
       ]);
+
+      if (payload.reused) {
+        toast.success("Reused a previous exact answer.");
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Could not get an answer.";
@@ -370,6 +573,8 @@ export function ChatWorkspace({
         messageId,
         noteContent: existingNote?.content ?? null,
         highlightColor: nextHighlightColor,
+        selectionStart: existingNote?.selectionStart ?? null,
+        selectionEnd: existingNote?.selectionEnd ?? null,
       });
     } catch (error) {
       setMessages(prevMessages);
@@ -393,20 +598,46 @@ export function ChatWorkspace({
     }
 
     const existingNote = notes.find((note) => note.messageId === messageId);
-    const nextNoteContent = existingNote ? null : message.content;
+    const selected =
+      selectedExcerpt?.messageId === messageId ? selectedExcerpt : null;
+    const noteToSave = selected?.text || message.content;
+    const nextNoteContent = existingNote ? null : noteToSave;
+    const nextSelectionStart = existingNote ? null : selected?.start ?? null;
+    const nextSelectionEnd = existingNote ? null : selected?.end ?? null;
 
     if (existingNote) {
       setNotes((prev) => prev.filter((note) => note.messageId !== messageId));
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === messageId
+            ? { ...item, selectionStart: null, selectionEnd: null }
+            : item,
+        ),
+      );
     } else {
       setNotes((prev) => [
         {
           id: createMessageId(),
           messageId,
-          content: message.content,
+          content: noteToSave,
           highlightColor: message.highlightColor ?? null,
+          selectionStart: nextSelectionStart,
+          selectionEnd: nextSelectionEnd,
         },
         ...prev,
       ]);
+
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === messageId
+            ? {
+                ...item,
+                selectionStart: nextSelectionStart,
+                selectionEnd: nextSelectionEnd,
+              }
+            : item,
+        ),
+      );
     }
 
     try {
@@ -414,7 +645,16 @@ export function ChatWorkspace({
         messageId,
         noteContent: nextNoteContent,
         highlightColor: message.highlightColor ?? null,
+        selectionStart: nextSelectionStart,
+        selectionEnd: nextSelectionEnd,
       });
+
+      if (!existingNote) {
+        toast.success(selected ? "Selected text saved." : "Note saved.");
+      }
+
+      setSelectedExcerpt(null);
+      clearBrowserSelection();
     } catch (error) {
       setMessages(prevMessages);
       setNotes(prevNotes);
@@ -427,6 +667,7 @@ export function ChatWorkspace({
   };
 
   const handleDeleteNote = async (noteId: string) => {
+    const prevMessages = messages;
     const prevNotes = notes;
 
     const note = notes.find((item) => item.id === noteId);
@@ -438,14 +679,24 @@ export function ChatWorkspace({
     const message = messages.find((item) => item.id === note.messageId);
 
     setNotes((prev) => prev.filter((item) => item.id !== noteId));
+    setMessages((prev) =>
+      prev.map((item) =>
+        item.id === note.messageId
+          ? { ...item, selectionStart: null, selectionEnd: null }
+          : item,
+      ),
+    );
 
     try {
       await persistAnnotation({
         messageId: note.messageId,
         noteContent: null,
         highlightColor: message?.highlightColor ?? null,
+        selectionStart: null,
+        selectionEnd: null,
       });
     } catch (error) {
+      setMessages(prevMessages);
       setNotes(prevNotes);
 
       const errorMessage =
@@ -464,76 +715,94 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#2c3138]">
-        <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
+    <div className="grid h-[calc(100vh-7rem)] min-h-0 w-full min-w-0 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#2c3138]">
+        <div className="mb-4 shrink-0 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
           <MessageSquare className="h-4 w-4 text-violet-500" />
           Your documents
         </div>
 
-        <div className="space-y-2">
-          {documents.map((doc) => {
-            const isActive = doc.id === selectedDocumentId;
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto">
+          <div className="space-y-2">
+            {documents.map((doc) => {
+              const isActive = doc.id === selectedDocumentId;
 
-            return (
-              <button
-                key={doc.id}
-                type="button"
-                onClick={() => handleSelectDocument(doc.id)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition ${
-                  isActive
-                    ? "border-violet-500 bg-violet-50 text-violet-900 dark:border-[#5960a4] dark:bg-[#39405a] dark:text-[#f4f5ff]"
-                    : "border-gray-200 hover:border-violet-200 hover:bg-gray-50 dark:border-[#3b414a] dark:text-[#d6dae3] dark:hover:bg-[#323840]"
-                }`}
-              >
-                <p className="truncate font-medium">{doc.filename}</p>
-                <p className="mt-1 text-xs text-gray-400 dark:text-[#9ea6b3]">
-                  Ask focused questions about this source
-                </p>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-6 border-t border-gray-100 pt-4 dark:border-[#3b414a]">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
-            <BookmarkPlus className="h-4 w-4 text-violet-500" />
-            Saved notes
+              return (
+                <button
+                  key={doc.id}
+                  type="button"
+                  onClick={() => handleSelectDocument(doc.id)}
+                  className={`w-full rounded-2xl border px-4 py-3 text-left text-sm transition ${
+                    isActive
+                      ? "border-violet-500 bg-violet-50 text-violet-900 dark:border-[#5960a4] dark:bg-[#39405a] dark:text-[#f4f5ff]"
+                      : "border-gray-200 hover:border-violet-200 hover:bg-gray-50 dark:border-[#3b414a] dark:text-[#d6dae3] dark:hover:bg-[#323840]"
+                  }`}
+                >
+                  <p className="truncate font-medium">{doc.filename}</p>
+                  <p className="mt-1 text-xs text-gray-400 dark:text-[#9ea6b3]">
+                    Ask focused questions about this source
+                  </p>
+                </button>
+              );
+            })}
           </div>
 
-          <div className="space-y-2">
-            {notes.length === 0 ? (
-              <p className="rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-500 dark:bg-[#323840] dark:text-[#aab2be]">
-                Save an assistant reply to keep it here.
-              </p>
-            ) : (
-              notes.map((note) => (
-                <div
-                  key={note.id}
-                  className={`rounded-2xl border p-3 text-sm ${getHighlightClasses(note.highlightColor)}`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="line-clamp-4 whitespace-pre-wrap">
-                      {note.content}
-                    </p>
+          <div className="border-t border-gray-100 pt-4 dark:border-[#3b414a]">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
+              <BookmarkPlus className="h-4 w-4 text-violet-500" />
+              Saved notes
+            </div>
 
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteNote(note.id)}
-                      className="shrink-0 rounded-xl p-2 text-gray-400 transition hover:bg-white/60 hover:text-red-500 dark:hover:bg-[#25292f]"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+            <div className="space-y-2">
+              {notes.length === 0 ? (
+                <p className="rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-500 dark:bg-[#323840] dark:text-[#aab2be]">
+                  Save an assistant reply to keep it here.
+                </p>
+              ) : (
+                notes.map((note) => (
+                  <div
+                    key={note.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => jumpToMessage(note.messageId)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        jumpToMessage(note.messageId);
+                      }
+                    }}
+                    className={`w-full rounded-2xl border p-3 text-left text-sm transition hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-violet-400 ${getHighlightClasses(note.highlightColor)}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="line-clamp-4 whitespace-pre-wrap">
+                        {note.content}
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleDeleteNote(note.id);
+                        }}
+                        className="shrink-0 rounded-xl p-2 text-gray-400 transition hover:bg-white/60 hover:text-red-500 dark:hover:bg-[#25292f]"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <p className="mt-2 text-[11px] font-medium opacity-70">
+                      Click to jump to source
+                    </p>
                   </div>
-                </div>
-              ))
-            )}
+                ))
+              )}
+            </div>
           </div>
         </div>
       </aside>
 
-      <section className="flex min-h-[70vh] flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#323840]">
-        <div className="border-b border-gray-100 pb-4 dark:border-[#3b414a]">
+      <section className="relative flex min-h-0 flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#323840]">
+        <div className="shrink-0 border-b border-gray-100 pb-4 dark:border-[#3b414a]">
           <p className="text-sm font-medium text-violet-600">Source chat</p>
           <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-[#f4f7fb]">
             {selectedDocument?.filename ?? "Choose a document"}
@@ -544,7 +813,11 @@ export function ChatWorkspace({
           </p>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto py-6">
+        <div
+          ref={scrollContainerRef}
+          onScroll={updateScrollState}
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto py-6"
+        >
           {loadingHistory ? (
             <div className="flex items-center gap-2 text-sm text-gray-400 dark:text-[#aab2be]">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -561,83 +834,112 @@ export function ChatWorkspace({
               &quot;Explain this in simple terms&quot;
             </div>
           ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                className={`rounded-2xl px-4 py-3 ${
-                  message.role === "user"
-                    ? "ml-auto max-w-[80%] bg-violet-600 text-white"
-                    : `max-w-[85%] border ${getHighlightClasses(message.highlightColor)}`
-                }`}
-              >
-                <p className="whitespace-pre-wrap text-sm leading-6">
-                  {message.content}
-                </p>
+            messages.map((message) => {
+              const hasSelectedExcerpt =
+                selectedExcerpt?.messageId === message.id &&
+                selectedExcerpt.text.length > 0;
 
-                {message.citations?.length ? (
-                  <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-[#434954] dark:text-[#aab2be]">
-                    {message.citations.map((citation) => (
-                      <div
-                        key={citation.index}
-                        className="rounded-xl bg-white/60 p-3 dark:bg-[#2a2f36]"
-                      >
-                        <p className="font-semibold text-gray-600 dark:text-[#dce2ec]">
-                          Source [{citation.index}]
-                        </p>
-                        <p className="mt-1 whitespace-pre-wrap">
-                          {citation.snippet}
-                        </p>
+              const bubbleClassName =
+                message.role === "user"
+                  ? "ml-auto max-w-[80%] bg-violet-600 text-white"
+                  : `max-w-[88%] border ${getHighlightClasses(message.highlightColor)}`;
+
+              return (
+                <div
+                  key={message.id}
+                  ref={(element) => {
+                    messageRefs.current[message.id] = element;
+                  }}
+                  className={`rounded-2xl px-4 py-3 transition ${
+                    flashedMessageId === message.id
+                      ? "ring-2 ring-violet-400 ring-offset-2 ring-offset-transparent"
+                      : ""
+                  } ${bubbleClassName}`}
+                >
+                  <p
+                    ref={(element) => {
+                      contentRefs.current[message.id] = element;
+                    }}
+                    className="whitespace-pre-wrap text-sm leading-6"
+                    onMouseUp={() => captureSelectedText(message.id)}
+                  >
+                    {renderMessageContent(message)}
+                  </p>
+
+                  {message.citations?.length ? (
+                    <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs text-gray-500 dark:border-[#434954] dark:text-[#aab2be]">
+                      {message.citations.map((citation) => (
+                        <div
+                          key={citation.index}
+                          className="rounded-xl bg-white/60 p-3 dark:bg-[#2a2f36]"
+                        >
+                          <p className="font-semibold text-gray-600 dark:text-[#dce2ec]">
+                            Source [{citation.index}]
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap">
+                            {citation.snippet}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {message.role === "assistant" ? (
+                    <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs dark:border-[#434954]">
+                      <div className="flex items-center gap-2 text-gray-500 dark:text-[#aab2be]">
+                        <Highlighter className="h-3.5 w-3.5" />
+                        Highlight
                       </div>
-                    ))}
-                  </div>
-                ) : null}
 
-                {message.role === "assistant" ? (
-                  <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs dark:border-[#434954]">
-                    <div className="flex items-center gap-2 text-gray-500 dark:text-[#aab2be]">
-                      <Highlighter className="h-3.5 w-3.5" />
-                      Highlight
+                      <div className="flex items-center gap-2">
+                        {HIGHLIGHT_OPTIONS.map((option) => {
+                          const isActive =
+                            message.highlightColor === option.color;
+
+                          return (
+                            <button
+                              key={option.color}
+                              type="button"
+                              onClick={() =>
+                                void handleHighlightMessage(
+                                  message.id,
+                                  option.color,
+                                )
+                              }
+                              className={`h-5 w-5 rounded-full border transition ${
+                                isActive
+                                  ? "scale-110 border-gray-900 dark:border-white"
+                                  : "border-white/70"
+                              }`}
+                              style={{ backgroundColor: option.swatch }}
+                              aria-label={`Highlight ${option.color}`}
+                            />
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleNote(message.id)}
+                        className="rounded-xl border border-gray-200 px-3 py-1.5 text-gray-600 transition hover:border-violet-300 hover:text-violet-700 dark:border-[#48505a] dark:text-[#dce2ec] dark:hover:border-[#6670ff] dark:hover:text-white"
+                      >
+                        {notes.some((note) => note.messageId === message.id)
+                          ? "Saved"
+                          : hasSelectedExcerpt
+                            ? "Save selection"
+                            : "Save note"}
+                      </button>
+
+                      {hasSelectedExcerpt ? (
+                        <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                          Selected text ready
+                        </span>
+                      ) : null}
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      {HIGHLIGHT_OPTIONS.map((option) => {
-                        const isActive = message.highlightColor === option.color;
-
-                        return (
-                          <button
-                            key={option.color}
-                            type="button"
-                            onClick={() =>
-                              void handleHighlightMessage(
-                                message.id,
-                                option.color,
-                              )
-                            }
-                            className={`h-5 w-5 rounded-full border transition ${
-                              isActive
-                                ? "scale-110 border-gray-900 dark:border-white"
-                                : "border-white/70"
-                            }`}
-                            style={{ backgroundColor: option.swatch }}
-                            aria-label={`Highlight ${option.color}`}
-                          />
-                        );
-                      })}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => void handleToggleNote(message.id)}
-                      className="rounded-xl border border-gray-200 px-3 py-1.5 text-gray-600 transition hover:border-violet-300 hover:text-violet-700 dark:border-[#48505a] dark:text-[#dce2ec] dark:hover:border-[#6670ff] dark:hover:text-white"
-                    >
-                      {notes.some((note) => note.messageId === message.id)
-                        ? "Saved"
-                        : "Save note"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ))
+                  ) : null}
+                </div>
+              );
+            })
           )}
 
           {sending ? (
@@ -648,26 +950,42 @@ export function ChatWorkspace({
           ) : null}
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-auto flex gap-3 pt-4">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              selectedDocument
-                ? `Ask about ${selectedDocument.filename}`
-                : "Choose a document to start"
-            }
-            disabled={!selectedDocument || sending}
-            className="flex-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-violet-500 dark:border-[#48505a] dark:bg-[#2a2f36] dark:text-[#f1f4fa] dark:placeholder:text-[#8e97a5]"
-          />
-
+        {showJumpToLatest ? (
           <button
-            type="submit"
-            disabled={!selectedDocument || sending || !input.trim()}
-            className="inline-flex items-center justify-center rounded-2xl bg-violet-600 px-5 py-3 text-white transition hover:bg-violet-700 disabled:opacity-50"
+            type="button"
+            onClick={() => scrollToLatest("smooth")}
+            className="absolute bottom-24 right-6 z-10 inline-flex items-center gap-2 rounded-full bg-violet-600 px-4 py-3 text-sm font-medium text-white shadow-lg transition hover:bg-violet-700"
           >
-            <SendHorizonal className="h-4 w-4" />
+            <ArrowDown className="h-4 w-4" />
+            Latest
           </button>
+        ) : null}
+
+        <form
+          onSubmit={handleSubmit}
+          className="mt-4 shrink-0 border-t border-gray-100 pt-4 dark:border-[#3b414a]"
+        >
+          <div className="flex gap-3">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={
+                selectedDocument
+                  ? `Ask about ${selectedDocument.filename}`
+                  : "Choose a document to start"
+              }
+              disabled={!selectedDocument || sending}
+              className="flex-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-violet-500 dark:border-[#48505a] dark:bg-[#2a2f36] dark:text-[#f1f4fa] dark:placeholder:text-[#8e97a5]"
+            />
+
+            <button
+              type="submit"
+              disabled={!selectedDocument || sending || !input.trim()}
+              className="inline-flex items-center justify-center rounded-2xl bg-violet-600 px-5 py-3 text-white transition hover:bg-violet-700 disabled:opacity-50"
+            >
+              <SendHorizonal className="h-4 w-4" />
+            </button>
+          </div>
         </form>
       </section>
     </div>

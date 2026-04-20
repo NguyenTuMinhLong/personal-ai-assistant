@@ -1,4 +1,3 @@
-// lib/annotations.ts
 import { createClient } from "@supabase/supabase-js";
 
 import { getSupabaseUrl } from "@/lib/supabase";
@@ -18,6 +17,8 @@ export type MessageAnnotation = {
   message_id: string;
   note_content: string | null;
   highlight_color: HighlightColor | null;
+  selection_start: number | null;
+  selection_end: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -64,11 +65,15 @@ export async function upsertMessageAnnotation(input: {
   messageId: string;
   noteContent?: string | null;
   highlightColor?: HighlightColor | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
 }): Promise<MessageAnnotation | null> {
   const supabase = createSupabaseAdminClient();
 
   const noteContent = input.noteContent?.trim() || null;
   const highlightColor = input.highlightColor ?? null;
+  const selectionStart = noteContent ? input.selectionStart ?? null : null;
+  const selectionEnd = noteContent ? input.selectionEnd ?? null : null;
 
   const { data, error } = await supabase
     .from("message_annotations")
@@ -80,6 +85,8 @@ export async function upsertMessageAnnotation(input: {
         message_id: input.messageId,
         note_content: noteContent,
         highlight_color: highlightColor,
+        selection_start: selectionStart,
+        selection_end: selectionEnd,
         updated_at: new Date().toISOString(),
       },
       {

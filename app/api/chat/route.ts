@@ -5,6 +5,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { getUserDocument, listDocumentEmbeddings } from "@/lib/documents";
 import {
+  findExactCachedAnswer,
+  type CachedCitation,
+  upsertCachedAnswer,
+} from "@/lib/qa-cache";
+import {
   createChatSession,
   getChatSession,
   saveMessage,
@@ -74,6 +79,13 @@ function rankChunks(rows: EmbeddingRow[], queryEmbedding: number[]) {
     .slice(0, 4);
 }
 
+function toUICitations(citations: CachedCitation[]) {
+  return citations.map((citation, index) => ({
+    index: index + 1,
+    snippet: citation.content_preview,
+  }));
+}
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -124,8 +136,10 @@ export async function POST(req: NextRequest) {
 
     if (sessionId) {
       const existing = await getChatSession(user.id, sessionId);
+      const existingDocumentId = (existing as { document_id?: string } | null)
+        ?.document_id;
 
-      if (!existing) {
+      if (!existing || existingDocumentId !== documentId) {
         sessionId = null;
       }
     }
@@ -134,6 +148,42 @@ export async function POST(req: NextRequest) {
       const title = message.slice(0, 60);
       const session = await createChatSession(user.id, documentId, title);
       sessionId = session?.id ?? null;
+    }
+
+    const cached = await findExactCachedAnswer({
+      userId: user.id,
+      documentId,
+      question: message,
+    });
+
+    if (cached) {
+      let assistantMessageId: string | null = null;
+
+      if (sessionId) {
+        await saveMessage(sessionId, "user", message);
+
+        const savedAssistantMessage = await saveMessage(
+          sessionId,
+          "assistant",
+          cached.answer,
+          cached.citations,
+        );
+
+        await touchChatSession(sessionId);
+        assistantMessageId = savedAssistantMessage?.id ?? null;
+      }
+
+      return NextResponse.json({
+        answer: cached.answer,
+        citations: toUICitations(cached.citations),
+        sessionId,
+        assistantMessageId,
+        reused: true,
+        document: {
+          id: document.id,
+          filename: document.filename,
+        },
+      });
     }
 
     const rows = await listDocumentEmbeddings(documentId);
@@ -182,15 +232,15 @@ Context:
 ${context}`,
     });
 
+    const dbCitations: CachedCitation[] = citations.map((citation) => ({
+      filename: document.filename,
+      chunk_index: citation.index,
+      content_preview: citation.snippet,
+    }));
+
     let assistantMessageId: string | null = null;
 
     if (sessionId) {
-      const dbCitations = citations.map((citation) => ({
-        filename: document.filename,
-        chunk_index: citation.index,
-        content_preview: citation.snippet,
-      }));
-
       await saveMessage(sessionId, "user", message);
 
       const savedAssistantMessage = await saveMessage(
@@ -205,11 +255,21 @@ ${context}`,
       assistantMessageId = savedAssistantMessage?.id ?? null;
     }
 
+    await upsertCachedAnswer({
+      userId: user.id,
+      documentId,
+      sessionId,
+      question: message,
+      answer: text,
+      citations: dbCitations,
+    });
+
     return NextResponse.json({
       answer: text,
       citations,
       sessionId,
       assistantMessageId,
+      reused: false,
       document: {
         id: document.id,
         filename: document.filename,

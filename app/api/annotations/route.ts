@@ -13,6 +13,8 @@ type RequestBody = {
   messageId?: string;
   noteContent?: string | null;
   highlightColor?: HighlightColor | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
 };
 
 const VALID_HIGHLIGHT_COLORS = new Set<HighlightColor>([
@@ -49,6 +51,17 @@ export async function POST(req: NextRequest) {
   const noteContent = body.noteContent?.trim() || null;
   const highlightColor = body.highlightColor ?? null;
 
+  const selectionStart =
+    typeof body.selectionStart === "number" &&
+    Number.isInteger(body.selectionStart)
+      ? body.selectionStart
+      : null;
+
+  const selectionEnd =
+    typeof body.selectionEnd === "number" && Number.isInteger(body.selectionEnd)
+      ? body.selectionEnd
+      : null;
+
   if (!sessionId || !messageId) {
     return NextResponse.json(
       { error: "sessionId and messageId are required." },
@@ -59,6 +72,24 @@ export async function POST(req: NextRequest) {
   if (highlightColor && !VALID_HIGHLIGHT_COLORS.has(highlightColor)) {
     return NextResponse.json(
       { error: "Invalid highlight color." },
+      { status: 400 },
+    );
+  }
+
+  if ((selectionStart === null) !== (selectionEnd === null)) {
+    return NextResponse.json(
+      { error: "selectionStart and selectionEnd must be provided together." },
+      { status: 400 },
+    );
+  }
+
+  if (
+    selectionStart !== null &&
+    selectionEnd !== null &&
+    (selectionStart < 0 || selectionEnd <= selectionStart)
+  ) {
+    return NextResponse.json(
+      { error: "Invalid text selection range." },
       { status: 400 },
     );
   }
@@ -108,6 +139,8 @@ export async function POST(req: NextRequest) {
       messageId,
       noteContent,
       highlightColor,
+      selectionStart,
+      selectionEnd,
     });
 
     return NextResponse.json({
