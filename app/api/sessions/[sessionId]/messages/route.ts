@@ -20,7 +20,7 @@ export async function GET(
   const session = await getChatSession(user.id, sessionId);
 
   if (!session) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    return NextResponse.json({ error: "Session not found." }, { status: 404 });
   }
 
   const [messages, annotations] = await Promise.all([

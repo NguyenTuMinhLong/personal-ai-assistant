@@ -63,8 +63,86 @@ function parseCitations(value: unknown): CachedCitation[] {
   });
 }
 
+function stripVietnameseDiacritics(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const LEADING_FILLERS = [
+  "cho mình",
+  "giúp mình",
+  "giup minh",
+  "cho toi",
+  "cho tôi",
+  "giúp tôi",
+  "giup toi",
+  "please",
+  "plz",
+  "làm ơn",
+  "lam on",
+  "nhờ bạn",
+  "nho ban",
+  "bạn ơi",
+  "ban oi",
+  "bro",
+];
+
+const TRAILING_FILLERS = [
+  "được không",
+  "duoc khong",
+  "đc không",
+  "dc khong",
+  "đi",
+  "nha",
+  "nhé",
+  "nhe",
+  "nhá",
+  "nhá",
+  "giúp mình nhé",
+  "giup minh nhe",
+  "giúp mình với",
+  "giup minh voi",
+  "please",
+  "plz",
+];
+
+function stripBoundaryPhrases(input: string, phrases: string[]) {
+  let output = input;
+
+  for (const phrase of phrases) {
+    const pattern = new RegExp(
+      `^${escapeRegExp(phrase)}\\s+|\\s+${escapeRegExp(phrase)}$`,
+      "g",
+    );
+
+    output = output.replace(pattern, " ").trim();
+  }
+
+  return output;
+}
+
 export function normalizeQuestion(input: string) {
-  return input.trim().toLowerCase().replace(/\s+/g, " ");
+  let normalized = input
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[“”"'"`’‘]/g, " ")
+    .replace(/[?!.,;:()[\]{}\-_/\\]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  normalized = stripVietnameseDiacritics(normalized);
+  normalized = stripBoundaryPhrases(normalized, LEADING_FILLERS);
+  normalized = stripBoundaryPhrases(normalized, TRAILING_FILLERS);
+  normalized = normalized.replace(/\s+/g, " ").trim();
+
+  return normalized;
 }
 
 export async function findExactCachedAnswer(input: {

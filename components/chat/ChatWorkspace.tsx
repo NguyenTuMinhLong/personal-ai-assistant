@@ -715,9 +715,9 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="grid h-[calc(100vh-7rem)] min-h-0 w-full min-w-0 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className="grid h-[calc(100vh-8rem)] min-h-0 w-full min-w-0 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col rounded-[1.75rem] border border-gray-200 bg-white p-5 dark:border-[#3b414a] dark:bg-[#2c3138]">
-        <div className="mb-4 shrink-0 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
+        <div className="mb-4 flex shrink-0 items-center gap-2 text-sm font-semibold text-gray-700 dark:text-[#eef1f7]">
           <MessageSquare className="h-4 w-4 text-violet-500" />
           Your documents
         </div>
