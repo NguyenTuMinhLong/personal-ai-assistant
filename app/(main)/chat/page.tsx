@@ -3,11 +3,12 @@ import { redirect } from "next/navigation";
 
 import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { listUserDocuments } from "@/lib/documents";
+import { getChatSession } from "@/lib/sessions";
 
 type ChatPageProps = {
   searchParams: Promise<{
     documentId?: string | string[];
-    sessionId?: string | string[]; // 👈 thêm
+    sessionId?: string | string[];
   }>;
 };
 
@@ -24,23 +25,39 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   const params = await searchParams;
 
   const documentIdParam = params.documentId;
-  const documentId =
-    typeof documentIdParam === "string" ? documentIdParam : null;
-  const initialDocumentId =
-    documentId && documents.some((doc) => doc.id === documentId)
-      ? documentId
-      : (documents[0]?.id ?? null);
-
-  // 👇 thêm
   const sessionIdParam = params.sessionId;
-  const initialSessionId =
+  const sessionId =
     typeof sessionIdParam === "string" ? sessionIdParam : null;
+
+  // If we have a sessionId but no documentId, look up the document from the session
+  let initialDocumentId: string | null = null;
+
+  if (typeof documentIdParam === "string" && documentIdParam) {
+    // documentId provided - validate it exists
+    initialDocumentId = documents.some((doc) => doc.id === documentIdParam)
+      ? documentIdParam
+      : null;
+  } else if (sessionId) {
+    // No documentId but have sessionId - fetch session to get document_id
+    const session = await getChatSession(user.id, sessionId);
+    if (session) {
+      // Check if the session's document exists in user's documents
+      initialDocumentId = documents.some((doc) => doc.id === session.document_id)
+        ? session.document_id
+        : null;
+    }
+  }
+
+  // Fallback to first document only if no document could be determined
+  if (!initialDocumentId && documents.length > 0) {
+    initialDocumentId = documents[0].id;
+  }
 
   return (
     <ChatWorkspace
       documents={documents}
       initialDocumentId={initialDocumentId}
-      initialSessionId={initialSessionId} // 👈 thêm
+      initialSessionId={sessionId}
     />
   );
 }

@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { getUserDocument, listDocumentEmbeddings } from "@/lib/documents";
 import {
-  findExactCachedAnswer,
+  findCachedAnswer,             // ← đổi thành cái này
   type CachedCitation,
   upsertCachedAnswer,
 } from "@/lib/qa-cache";
@@ -150,10 +150,11 @@ export async function POST(req: NextRequest) {
       sessionId = session?.id ?? null;
     }
 
-    const cached = await findExactCachedAnswer({
+    const cached = await findCachedAnswer({
       userId: user.id,
       documentId,
       question: message,
+      sessionId: sessionId
     });
 
     if (cached) {
