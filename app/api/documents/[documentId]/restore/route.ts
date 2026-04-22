@@ -1,7 +1,6 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-
-import { softDeleteDocument } from "@/lib/documents";
+import { restoreDocument } from "@/lib/documents";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -10,7 +9,10 @@ type RouteParams = {
   params: Promise<{ documentId: string }>;
 };
 
-export async function DELETE(_req: NextRequest, { params }: RouteParams) {
+export async function POST(
+  _req: NextRequest,
+  { params }: RouteParams,
+) {
   const user = await currentUser();
 
   if (!user) {
@@ -27,12 +29,11 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    await softDeleteDocument(user.id, documentId);
-
-    return NextResponse.json({ success: true, documentId });
+    await restoreDocument(user.id, documentId);
+    return NextResponse.json({ success: true });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Could not delete document.";
+      error instanceof Error ? error.message : "Could not restore document.";
 
     return NextResponse.json({ error: message }, { status: 500 });
   }

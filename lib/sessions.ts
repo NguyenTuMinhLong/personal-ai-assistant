@@ -43,7 +43,7 @@ export async function listChatSessions(
   const supabase = createSupabaseAdminClient();
   let query = supabase
     .from("chat_sessions")
-    .select("*")
+    .select("*, documents:document_id (filename)")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
     .limit(30);
@@ -59,7 +59,10 @@ export async function listChatSessions(
     return [];
   }
 
-  return (data ?? []) as ChatSession[];
+  return (data ?? []).map((session) => ({
+    ...session,
+    document_name: (session.documents as { filename?: string } | null)?.filename,
+  })) as ChatSession[];
 }
 
 export async function getChatSession(
@@ -84,6 +87,20 @@ export async function touchChatSession(sessionId: string) {
     .from("chat_sessions")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", sessionId);
+}
+
+export async function deleteChatSession(userId: string, sessionId: string) {
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase
+    .from("chat_sessions")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", sessionId);
+
+  if (error) {
+    throw new Error(error.message || "Could not delete session.");
+  }
+  return true;
 }
 
 // ─── Messages ────────────────────────────────────────────────

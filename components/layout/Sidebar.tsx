@@ -10,17 +10,40 @@ import {
   Settings,
   Sparkles,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { useChatSessions } from "@/hooks/useChatSessions";
 
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const documentId = searchParams.get("documentId") ?? undefined;
   const currentSessionId = searchParams.get("sessionId");
 
   const { sessions, loading } = useChatSessions(documentId);
+
+  const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, title: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!confirm(`Delete "${title}"?`)) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+      if (res.ok) {
+        toast.success("Chat deleted");
+        router.refresh();
+      } else {
+        throw new Error();
+      }
+    } catch {
+      toast.error("Could not delete chat");
+    }
+  };
 
   const navLink = (
     href: string,
@@ -115,19 +138,30 @@ export function Sidebar() {
               ) : (
                 sessions.slice(0, 8).map((session) => {
                   const isActive = currentSessionId === session.id;
-                  const sessionUrl = `/chat?documentId=${session.document_ids}&sessionId=${session.id}`;
+                  const sessionUrl = `/chat?documentId=${session.document_id}&sessionId=${session.id}`;
 
                   return (
-                    <Link
-                      key={session.id}
-                      href={sessionUrl}
-                      className={`group flex flex-col rounded-xl px-4 py-3 transition-all duration-200
-                        ${
+                    <div className="group relative flex flex-col rounded-xl px-4 py-3 transition-all duration-200 hover:bg-gray-50 dark:hover:bg-[#2a2d38]">
+                      <Link
+                        href={sessionUrl}
+                        className={`absolute inset-0 rounded-xl ${
                           isActive
                             ? "bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border border-violet-200/50 dark:border-violet-500/30"
-                            : "hover:bg-gray-50 dark:hover:bg-[#2a2d38]"
+                            : ""
                         }`}
-                    >
+                      />
+                      <button
+                        onClick={(e) => handleDeleteSession(e, session.id, session.title)}
+                        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md text-gray-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-red-500/20"
+                        title="Delete chat"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                      {session.document_name && (
+                        <span className="mb-0.5 truncate text-xs font-medium text-violet-600 dark:text-violet-400">
+                          {session.document_name}
+                        </span>
+                      )}
                       <span className="truncate text-sm font-medium text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white">
                         {session.title}
                       </span>
@@ -136,7 +170,7 @@ export function Sidebar() {
                           addSuffix: true,
                         })}
                       </span>
-                    </Link>
+                    </div>
                   );
                 })
               )}

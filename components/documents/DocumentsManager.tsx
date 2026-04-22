@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import {
   FileText,
   MessageSquare,
@@ -32,9 +33,19 @@ type DocumentsManagerProps = {
   initialDocuments: StoredDocument[];
 };
 
+type PendingDeletion = {
+  documentId: string;
+  filename: string;
+  deletedAt: number;
+};
+
+const PENDING_DELETIONS_KEY = "pendingDocumentDeletions";
+const UNDO_TIMEOUT_MS = 30000;
+
 export function DocumentsManager({
   initialDocuments,
 }: DocumentsManagerProps) {
+  const router = useRouter();
   const [documents, setDocuments] =
     useState<UploadedDocument[]>(initialDocuments);
   const [isDragging, setIsDragging] = useState(false);
@@ -44,6 +55,36 @@ export function DocumentsManager({
     current: number;
     total: number;
   } | null>(null);
+
+  // Check for pending deletions on mount
+  useEffect(() => {
+    const pending = JSON.parse(
+      localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
+    ) as PendingDeletion[];
+
+    const validPending = pending.filter(
+      (d) => Date.now() - d.deletedAt < UNDO_TIMEOUT_MS
+    );
+
+    validPending.forEach((deletion) => {
+      toast.success(
+        <div className="flex items-center gap-3">
+          <span>"{deletion.filename}" deleted</span>
+          <button
+            onClick={() => handleRestore(deletion.documentId)}
+            className="rounded-md bg-white/20 px-2 py-1 text-sm font-medium text-white hover:bg-white/30"
+          >
+            Undo
+          </button>
+        </div>,
+        { duration: UNDO_TIMEOUT_MS - (Date.now() - deletion.deletedAt) }
+      );
+    });
+
+    if (validPending.length > 0) {
+      localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(validPending));
+    }
+  }, []);
 
   const handleFileUpload = async (files: FileList) => {
     setUploading(true);
@@ -127,7 +168,32 @@ export function DocumentsManager({
   };
 
   const handleDeleteDocument = async (documentId: string) => {
+    const docToDelete = documents.find((d) => d.id === documentId);
+    const filename = docToDelete?.filename ?? "Document";
+    const deletedAt = Date.now();
+
+    setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
     setDeletingId(documentId);
+
+    // Persist to localStorage for undo across refreshes
+    const pending: PendingDeletion[] = JSON.parse(
+      localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
+    );
+    pending.push({ documentId, filename, deletedAt });
+    localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(pending));
+
+    toast.success(
+      <div className="flex items-center gap-3">
+        <span>"{filename}" deleted</span>
+        <button
+          onClick={() => handleRestore(documentId, true)}
+          className="rounded-md bg-white/20 px-2 py-1 text-sm font-medium text-white hover:bg-white/30"
+        >
+          Undo
+        </button>
+      </div>,
+      { duration: UNDO_TIMEOUT_MS }
+    );
 
     try {
       const response = await fetch(`/api/documents/${documentId}`, {
@@ -141,14 +207,50 @@ export function DocumentsManager({
         throw new Error(payload?.error || "Could not delete document.");
       }
 
-      setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
-      toast.success("Document deleted.");
+      // Remove from pending after successful deletion
+      const updatedPending: PendingDeletion[] = JSON.parse(
+        localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
+      ).filter((d) => d.documentId !== documentId);
+      localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
     } catch (error) {
+      // Remove from pending on failure
+      const updatedPending: PendingDeletion[] = JSON.parse(
+        localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
+      ).filter((d) => d.documentId !== documentId);
+      localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
+
+      // Restore the document in UI
+      setDocuments((prev) =>
+        docToDelete ? [docToDelete, ...prev] : prev
+      );
+
       const message =
         error instanceof Error ? error.message : "Could not delete document.";
       toast.error(message);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleRestore = async (documentId: string, fromToast = false) => {
+    try {
+      const response = await fetch(`/api/documents/${documentId}/restore`, {
+        method: "POST",
+      });
+
+      if (response.ok) {
+        toast.success("Document restored");
+        // Remove from pending
+        const updatedPending: PendingDeletion[] = JSON.parse(
+          localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
+        ).filter((d) => d.documentId !== documentId);
+        localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
+        router.refresh();
+      } else {
+        throw new Error();
+      }
+    } catch {
+      toast.error("Could not restore document");
     }
   };
 

@@ -167,6 +167,47 @@ export function getQACacheKey(
   userId: string,
   documentId: string,
   normalizedQuestion: string,
+  sessionId?: string | null,
 ): string {
-  return InMemoryCache.key("qa", userId, documentId, normalizedQuestion);
+  const parts = ["qa", userId, documentId, normalizedQuestion];
+  if (sessionId) {
+    parts.push(`s:${sessionId}`);
+  }
+  return parts.join(":");
+}
+
+// ==================== Document Chunk Cache ====================
+
+type ChunkCacheEntry = {
+  chunk_index: number;
+  content: string;
+  embedding: number[];
+};
+
+// Singleton for document chunks cache
+let chunkCacheInstance: InMemoryCache<ChunkCacheEntry[]> | null;
+
+const CHUNK_CACHE_MAX_ENTRIES = 100;
+const CHUNK_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+export function getChunkCache(): InMemoryCache<ChunkCacheEntry[]> {
+  if (!chunkCacheInstance) {
+    chunkCacheInstance = new InMemoryCache<ChunkCacheEntry[]>({
+      maxEntries: CHUNK_CACHE_MAX_ENTRIES,
+      defaultTTL: CHUNK_CACHE_TTL,
+    });
+  }
+  return chunkCacheInstance;
+}
+
+export function getCachedChunks(documentId: string): ChunkCacheEntry[] | null {
+  return getChunkCache().get(`chunks:${documentId}`);
+}
+
+export function setCachedChunks(documentId: string, chunks: ChunkCacheEntry[]): void {
+  getChunkCache().set(`chunks:${documentId}`, chunks, CHUNK_CACHE_TTL);
+}
+
+export function invalidateChunkCache(documentId: string): boolean {
+  return getChunkCache().delete(`chunks:${documentId}`);
 }

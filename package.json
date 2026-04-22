@@ -19,6 +19,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "fuzzball": "^2.2.3",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
     "marked": "^18.0.0",
@@ -27,6 +28,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "sonner": "^2.0.7",
+    "string-similarity": "^4.0.4",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {

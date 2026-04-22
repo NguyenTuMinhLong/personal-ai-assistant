@@ -25,10 +25,11 @@ export type Chunk = {
 export type ChatSession = {
   id: string;
   user_id: string;
-  document_ids: string;
+  document_id: string;
   title: string;
   created_at: string;
   updated_at: string;
+  document_name?: string;
 };
 
 export type Message = {
