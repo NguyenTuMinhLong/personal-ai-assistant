@@ -14,6 +14,7 @@ import {
   Copy,
   Check,
   FileText,
+  ImagePlus,
   Loader2,
   MessageSquare,
   Plus,
@@ -37,6 +38,7 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  imageUrl?: string | null;
   citations?: Citation[];
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
@@ -161,6 +163,9 @@ export function ChatWorkspace({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notes, setNotes] = useState<SavedNote[]>([]);
   const [input, setInput] = useState("");
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -239,6 +244,57 @@ export function ChatWorkspace({
       toast.error("Failed to copy");
     }
   }, []);
+
+  const handleImageSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error("Unsupported format. Please use JPEG, PNG, GIF, or WebP.");
+      event.target.value = "";
+      return;
+    }
+
+    // Validate file size (10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File too large. Maximum size is 10MB.");
+      event.target.value = "";
+      return;
+    }
+
+    // Validate minimum size (detect corrupt files)
+    if (file.size < 1000) {
+      toast.error("This image appears to be invalid or corrupted.");
+      event.target.value = "";
+      return;
+    }
+
+    // Check for duplicate (compare by name and size)
+    if (selectedImage && selectedImage.name === file.name && selectedImage.size === file.size) {
+      toast.info("This image is already selected.");
+      event.target.value = "";
+      return;
+    }
+
+    // Clear previous image preview if exists
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+    }
+
+    setSelectedImage(file);
+    setImagePreview(URL.createObjectURL(file));
+    event.target.value = ""; // Reset input
+  }, [selectedImage, imagePreview]);
+
+  const removeSelectedImage = useCallback(() => {
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setSelectedImage(null);
+    setImagePreview(null);
+  }, [imagePreview]);
 
   const captureSelectedText = useCallback((messageId: string) => {
     if (!highlightMode) return;
@@ -360,6 +416,7 @@ export function ChatWorkspace({
             id: message.id,
             role: message.role,
             content: message.content,
+            imageUrl: (message as { image_url?: string | null }).image_url ?? null,
             citations: message.citations?.map((citation, index) => ({
               index: index + 1,
               snippet: citation.content_preview,
@@ -390,22 +447,61 @@ export function ChatWorkspace({
   useEffect(() => {
     return () => {
       if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
     };
-  }, []);
+  }, [imagePreview]);
 
   const handleSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || !currentDocumentId) return;
+    if (!trimmed && !selectedImage) return;
+    if (!currentDocumentId) return;
+
+    let imageUrl: string | undefined;
+
+    // Upload image if selected
+    if (selectedImage) {
+      setUploadingImage(true);
+      try {
+        const uploadFormData = new FormData();
+        uploadFormData.append("file", selectedImage);
+
+        const uploadRes = await fetch("/api/chat-images", {
+          method: "POST",
+          body: uploadFormData,
+        });
+
+        if (!uploadRes.ok) {
+          const error = await uploadRes.json();
+          throw new Error(error.error || "Failed to upload image");
+        }
+
+        const uploadData = await uploadRes.json();
+        imageUrl = uploadData.url;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to upload image");
+        setUploadingImage(false);
+        return;
+      } finally {
+        setUploadingImage(false);
+      }
+    }
 
     const userMessage: ChatMessage = {
       id: createMessageId(),
       role: "user",
       content: trimmed,
+      imageUrl: imageUrl ?? null,
     };
 
+    // Clear input and image
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setSelectedImage(null);
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImagePreview(null);
     setSending(true);
     setHighlightMode(false);
     setSelectedExcerpt(null);
@@ -420,6 +516,7 @@ export function ChatWorkspace({
         body: JSON.stringify({
           documentId: currentDocumentId,
           message: trimmed,
+          imageUrl,
           sessionId: currentSessionId,
         }),
       });
@@ -837,6 +934,12 @@ export function ChatWorkspace({
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                               {isUser ? "You" : "SecondBrain"}
                             </span>
+                            {message.imageUrl && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600 dark:bg-violet-500/20 dark:text-violet-400">
+                                <ImagePlus className="h-3 w-3" />
+                                Image attached
+                              </span>
+                            )}
                             {isUser && (
                               <button
                                 onClick={() => copyToClipboard(message.content, message.id)}
@@ -855,6 +958,17 @@ export function ChatWorkspace({
                           <div
                             className={`rounded-2xl border px-5 py-4 ${getHighlightClasses(message.highlightColor, isUser)}`}
                           >
+                            {/* Image preview */}
+                            {message.imageUrl && (
+                              <div className="mb-3">
+                                <img
+                                  src={message.imageUrl}
+                                  alt="Attached image"
+                                  className="max-h-64 max-w-full rounded-lg border border-gray-200/50 object-contain dark:border-gray-700/50"
+                                />
+                              </div>
+                            )}
+
                             <p
                               ref={(element) => {
                                 contentRefs.current[message.id] = element;
@@ -1029,36 +1143,87 @@ export function ChatWorkspace({
 
           {/* Input */}
           <div className="shrink-0 border-t border-gray-200/50 bg-white/80 p-4 backdrop-blur-xl dark:border-violet-900/30 dark:bg-[#1a1c24]/80">
-            <form onSubmit={handleSubmit} className="flex items-center gap-3">
-              <div className="relative flex-1">
-                <input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={
-                    selectedDocument
-                      ? `Ask about ${selectedDocument.filename}...`
-                      : "Select a document to start..."
-                  }
-                  disabled={!selectedDocument || sending}
-                  className="w-full rounded-xl border border-gray-200/50 bg-gray-50/50 px-4 py-3.5 pr-12 text-sm outline-none transition-all placeholder:text-gray-400 focus:border-violet-500/50 focus:bg-white focus:shadow-lg focus:shadow-violet-500/10 dark:border-violet-900/50 dark:bg-[#252530] dark:text-white dark:placeholder:text-gray-600 dark:focus:border-violet-500/50 dark:focus:bg-[#1a1c24] disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                {input && (
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+              {/* Image preview */}
+              {imagePreview && (
+                <div className="flex items-center gap-3 rounded-xl border border-violet-200/50 bg-violet-50/50 p-3 dark:border-violet-900/30 dark:bg-violet-500/5">
+                  <div className="relative shrink-0">
+                    <img
+                      src={imagePreview}
+                      alt="Preview"
+                      className="h-16 w-16 rounded-lg border border-gray-200/50 object-cover dark:border-gray-700/50"
+                    />
+                    {uploadingImage && (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50">
+                        <Loader2 className="h-5 w-5 animate-spin text-white" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-gray-700 dark:text-gray-200">
+                      {selectedImage?.name}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {selectedImage && (selectedImage.size / 1024).toFixed(1)} KB
+                      {uploadingImage && " • Uploading..."}
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setInput("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-gray-400 transition-all hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+                    onClick={removeSelectedImage}
+                    disabled={uploadingImage}
+                    className="shrink-0 rounded-lg p-2 text-gray-400 transition-all hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-800"
                   >
-                    <X className="h-4 w-4" />
+                    <X className="h-5 w-5" />
                   </button>
-                )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-3">
+                {/* Image attachment button */}
+                <label
+                  className={`flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-gray-200/50 bg-gray-50/50 text-gray-500 transition-all hover:border-violet-300 hover:bg-violet-50 hover:text-violet-600 dark:border-violet-900/50 dark:bg-[#252530] dark:text-gray-400 dark:hover:border-violet-500/50 dark:hover:bg-violet-500/10 dark:hover:text-violet-400 ${(!selectedDocument || sending) ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    onChange={handleImageSelect}
+                    disabled={!selectedDocument || sending}
+                    className="hidden"
+                  />
+                  <ImagePlus className="h-5 w-5" />
+                </label>
+
+                <div className="relative flex-1">
+                  <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={
+                      selectedDocument
+                        ? `Ask about ${selectedDocument.filename}...`
+                        : "Select a document to start..."
+                    }
+                    disabled={!selectedDocument || sending}
+                    className="w-full rounded-xl border border-gray-200/50 bg-gray-50/50 px-4 py-3.5 pr-12 text-sm outline-none transition-all placeholder:text-gray-400 focus:border-violet-500/50 focus:bg-white focus:shadow-lg focus:shadow-violet-500/10 dark:border-violet-900/50 dark:bg-[#252530] dark:text-white dark:placeholder:text-gray-600 dark:focus:border-violet-500/50 dark:focus:bg-[#1a1c24] disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  {input && (
+                    <button
+                      type="button"
+                      onClick={() => setInput("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-gray-400 transition-all hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  disabled={!selectedDocument || sending || (!input.trim() && !selectedImage) || uploadingImage}
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/30 transition-all hover:shadow-xl hover:shadow-violet-500/40 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                >
+                  <SendHorizonal className="h-5 w-5" />
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={!selectedDocument || sending || !input.trim()}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/30 transition-all hover:shadow-xl hover:shadow-violet-500/40 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
-              >
-                <SendHorizonal className="h-5 w-5" />
-              </button>
             </form>
           </div>
         </main>

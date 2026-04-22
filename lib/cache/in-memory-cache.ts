@@ -211,3 +211,56 @@ export function setCachedChunks(documentId: string, chunks: ChunkCacheEntry[]): 
 export function invalidateChunkCache(documentId: string): boolean {
   return getChunkCache().delete(`chunks:${documentId}`);
 }
+
+// ==================== Image Cache ====================
+
+type ImageCacheEntry = {
+  description: string;
+  isRelated: boolean;
+  analyzedAt: number;
+};
+
+const IMAGE_CACHE_MAX_ENTRIES = 50;
+const IMAGE_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+let imageCacheInstance: InMemoryCache<ImageCacheEntry> | null;
+
+export function getImageCache(): InMemoryCache<ImageCacheEntry> {
+  if (!imageCacheInstance) {
+    imageCacheInstance = new InMemoryCache<ImageCacheEntry>({
+      maxEntries: IMAGE_CACHE_MAX_ENTRIES,
+      defaultTTL: IMAGE_CACHE_TTL,
+    });
+  }
+  return imageCacheInstance;
+}
+
+/**
+ * Generate a hash for image URL to use as cache key
+ */
+export function getImageCacheKey(imageUrl: string): string {
+  // Use URL origin + pathname as key (ignore query params)
+  try {
+    const url = new URL(imageUrl);
+    return `img:${url.origin}${url.pathname}`;
+  } catch {
+    // If URL parsing fails, use the full URL
+    return `img:${imageUrl}`;
+  }
+}
+
+export function getCachedImageAnalysis(imageUrl: string): ImageCacheEntry | null {
+  return getImageCache().get(getImageCacheKey(imageUrl));
+}
+
+export function setCachedImageAnalysis(
+  imageUrl: string,
+  description: string,
+  isRelated: boolean,
+): void {
+  getImageCache().set(getImageCacheKey(imageUrl), {
+    description,
+    isRelated,
+    analyzedAt: Date.now(),
+  });
+}

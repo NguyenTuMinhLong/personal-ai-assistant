@@ -110,11 +110,12 @@ export async function saveMessage(
   role: "user" | "assistant",
   content: string,
   citations: Message["citations"] = [],
+  imageUrl?: string | null,
 ): Promise<Message | null> {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("messages")
-    .insert({ session_id: sessionId, role, content, citations })
+    .insert({ session_id: sessionId, role, content, citations, image_url: imageUrl ?? null })
     .select()
     .single();
 

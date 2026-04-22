@@ -37,6 +37,7 @@ export type Message = {
   session_id: string;
   role: 'user' | 'assistant';
   content: string;
+  imageUrl?: string | null;
   citations: Array<{
     filename: string;
     chunk_index: number;

@@ -36,13 +36,15 @@ export function getEmbeddingModel() {
   return provider.embedding("text-embedding-3-small");
 }
 
-export function getChatModel() {
+export function getChatModel(hasImage = false) {
   const provider = createProvider();
   const apiKey = getAIApiKey();
 
   if (apiKey.startsWith("sk-or-v1-")) {
-    return provider("openai/gpt-4o-mini");
+    // Use gpt-4o for image support, gpt-4o-mini for text-only
+    return provider(hasImage ? "openai/gpt-4o" : "openai/gpt-4o-mini");
   }
 
-  return provider("gpt-4o-mini");
+  // Use gpt-4o for image support, gpt-4o-mini for text-only
+  return provider(hasImage ? "gpt-4o" : "gpt-4o-mini");
 }
