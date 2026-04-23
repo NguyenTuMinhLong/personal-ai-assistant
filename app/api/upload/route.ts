@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
       const { data: doc, error: docError } = await supabase
         .from("documents")
         .insert({
-          user_id: user.id,
+          userId: user.id,
           filename: file.name,
           content: text,
         })
@@ -207,9 +207,9 @@ export async function POST(req: NextRequest) {
         const { error: embeddingError } = await supabase
           .from("document_embeddings")
           .insert({
-            document_id: doc.id,
+            documentId: doc.id,
             content: chunk,
-            chunk_index: i,
+            chunkIndex: i,
             embedding,
           });
 
@@ -229,7 +229,7 @@ export async function POST(req: NextRequest) {
             .from("documents")
             .update({ summary })
             .eq("id", doc.id)
-            .eq("user_id", user.id);
+            .eq("userId", user.id);
 
           if (summaryError) {
             console.error("Summary update error:", summaryError);

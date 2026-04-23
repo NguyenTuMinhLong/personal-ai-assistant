@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import {
   FileText,
   MessageSquare,
@@ -19,12 +19,12 @@ import { useChatSessions } from "@/hooks/useChatSessions";
 
 export function Sidebar() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const params = useParams();
   const router = useRouter();
-  const documentId = searchParams.get("documentId") ?? undefined;
-  const currentSessionId = searchParams.get("sessionId");
+  const documentId = params.documentId as string | undefined;
+  const currentSessionId = params.sessionId as string | undefined;
 
-  const { sessions, loading } = useChatSessions(documentId);
+  const { sessions, loading, refreshSessions } = useChatSessions(documentId);
 
   const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, title: string) => {
     e.preventDefault();
@@ -36,7 +36,7 @@ export function Sidebar() {
       const res = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
       if (res.ok) {
         toast.success("Chat deleted");
-        router.refresh();
+        refreshSessions();
       } else {
         throw new Error();
       }
@@ -54,85 +54,78 @@ export function Sidebar() {
     return (
       <Link
         href={href}
-        className={`group flex items-center gap-3 rounded-xl px-4 py-3 font-medium transition-all duration-200
+        className={`group flex items-center gap-3 rounded-lg px-4 py-2.5 font-medium transition-all duration-200
           ${
             isActive
-              ? "bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 text-violet-600 dark:from-violet-500/20 dark:to-fuchsia-500/20 dark:text-violet-400"
-              : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-[#2a2d38] dark:hover:text-white"
+              ? "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
+              : "text-stone-500 hover:bg-stone-50 hover:text-stone-900 dark:text-stone-500 dark:hover:bg-stone-800/60 dark:hover:text-stone-200"
           }`}
       >
-        <span
-          className={`transition-transform duration-200 group-hover:scale-110 ${
-            isActive ? "text-violet-600 dark:text-violet-400" : ""
-          }`}
-        >
+        <span className={isActive ? "text-stone-700 dark:text-stone-200" : ""}>
           {icon}
         </span>
         {label}
-        {isActive && (
-          <ChevronRight className="ml-auto h-4 w-4 text-violet-500" />
-        )}
       </Link>
     );
   };
 
   return (
-    <div className="flex h-full w-64 flex-col border-r border-gray-100 bg-white dark:border-violet-900/20 dark:bg-[#1a1c24]">
+    <div className="flex h-full w-64 flex-col border-r border-stone-200 bg-stone-100/50 dark:border-stone-800 dark:bg-stone-900">
       {/* Logo */}
-      <div className="border-b border-gray-100 p-5 dark:border-violet-900/20">
+      <div className="border-b border-stone-200 p-5 dark:border-stone-800">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 shadow-lg shadow-violet-500/25">
-            <Sparkles className="h-5 w-5 text-white" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-stone-200 dark:bg-stone-800">
+            <Sparkles className="h-4 w-4 text-stone-500 dark:text-stone-400" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white">
-              Second<span className="text-violet-600">Brain</span>
+            <h2 className="text-base font-semibold text-stone-800 dark:text-stone-100">
+              Second<span className="text-stone-500 dark:text-stone-400">Brain</span>
             </h2>
-            <p className="text-xs text-gray-500 dark:text-gray-500">
-              AI Document Assistant
+            <p className="text-xs text-stone-400 dark:text-stone-500">
+              Your personal AI assistant
             </p>
           </div>
         </div>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto p-4">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
         {navLink(
           "/documents",
-          <FileText className="h-5 w-5" />,
+          <FileText className="h-4 w-4" />,
           "Documents",
           pathname === "/documents",
         )}
         {navLink(
           "/chat",
-          <MessageSquare className="h-5 w-5" />,
+          <MessageSquare className="h-4 w-4" />,
           "Chat",
           pathname === "/chat" || pathname.startsWith("/chat"),
         )}
 
         {/* Chat History Section */}
         {sessions.length > 0 && (
-          <div className="mt-6">
-            <div className="mb-2 flex items-center justify-between px-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">
-                Recent chats
+          <div className="mt-4">
+            <div className="mb-1 flex items-center justify-between px-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-600">
+                Recent
               </p>
               {documentId && (
                 <Link
                   href={`/chat?documentId=${documentId}`}
-                  className="flex h-6 w-6 items-center justify-center rounded-lg bg-violet-100 text-violet-600 transition-colors hover:bg-violet-200 dark:bg-violet-500/20 dark:text-violet-400 dark:hover:bg-violet-500/30"
+                  className="flex h-5 w-5 items-center justify-center rounded text-stone-400 transition-colors hover:bg-stone-200 hover:text-stone-600 dark:hover:bg-stone-800 dark:hover:text-stone-300"
                   title="New chat"
                 >
-                  <Plus className="h-3.5 w-3.5" />
+                  <Plus className="h-3 w-3" />
                 </Link>
               )}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <div
                     key={i}
-                    className="mx-2 h-12 animate-pulse rounded-xl bg-gray-100 dark:bg-[#23262f]"
+                    className="mx-2 h-8 animate-pulse rounded bg-stone-200/50 dark:bg-stone-800/50"
                   />
                 ))
               ) : (
@@ -141,34 +134,29 @@ export function Sidebar() {
                   const sessionUrl = `/chat?documentId=${session.document_id}&sessionId=${session.id}`;
 
                   return (
-                    <div className="group relative flex flex-col rounded-xl px-4 py-3 transition-all duration-200 hover:bg-gray-50 dark:hover:bg-[#2a2d38]">
+                    <div key={session.id} className="group relative flex flex-col rounded-md px-3 py-1.5 transition-colors hover:bg-stone-200/50 dark:hover:bg-stone-800/40">
                       <Link
                         href={sessionUrl}
-                        className={`absolute inset-0 rounded-xl ${
+                        className={`absolute inset-0 rounded-md ${
                           isActive
-                            ? "bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border border-violet-200/50 dark:border-violet-500/30"
+                            ? "bg-stone-200/70 dark:bg-stone-800"
                             : ""
                         }`}
                       />
                       <button
                         onClick={(e) => handleDeleteSession(e, session.id, session.title)}
-                        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md text-gray-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-red-500/20"
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-stone-400 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover:opacity-100 dark:hover:bg-red-900/20 dark:hover:text-red-400"
                         title="Delete chat"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3 w-3" />
                       </button>
                       {session.document_name && (
-                        <span className="mb-0.5 truncate text-xs font-medium text-violet-600 dark:text-violet-400">
+                        <span className="truncate text-[10px] font-medium text-stone-500 dark:text-stone-500">
                           {session.document_name}
                         </span>
                       )}
-                      <span className="truncate text-sm font-medium text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white">
+                      <span className="truncate text-xs text-stone-600 dark:text-stone-400">
                         {session.title}
-                      </span>
-                      <span className="mt-0.5 text-xs text-gray-400 dark:text-gray-600">
-                        {formatDistanceToNow(new Date(session.updated_at), {
-                          addSuffix: true,
-                        })}
                       </span>
                     </div>
                   );
@@ -182,19 +170,19 @@ export function Sidebar() {
         {(!sessions.length || !documentId) && (
           <Link
             href="/chat"
-            className="mt-4 flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 px-4 py-3 text-sm font-medium text-white shadow-lg shadow-violet-500/25 transition-all hover:shadow-xl hover:shadow-violet-500/30"
+            className="mx-2 mt-3 flex items-center gap-2 rounded-md bg-stone-200 px-3 py-2 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-300 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700"
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-3 w-3" />
             New chat
           </Link>
         )}
       </nav>
 
       {/* Settings at bottom */}
-      <div className="border-t border-gray-100 p-4 dark:border-violet-900/20">
+      <div className="border-t border-stone-200 p-2 dark:border-stone-800">
         {navLink(
           "/settings",
-          <Settings className="h-5 w-5" />,
+          <Settings className="h-4 w-4" />,
           "Settings",
           pathname === "/settings",
         )}

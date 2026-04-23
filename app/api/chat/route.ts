@@ -28,7 +28,7 @@ type RequestBody = {
 };
 
 type EmbeddingRow = {
-  chunk_index: number;
+  chunkIndex: number;
   content: string;
   embedding: unknown;
 };
@@ -87,7 +87,7 @@ function rankChunks(rows: EmbeddingRow[], queryEmbedding: number[]) {
 function toUICitations(citations: CachedCitation[]) {
   return citations.map((citation, index) => ({
     index: index + 1,
-    snippet: citation.content_preview,
+    snippet: citation.contentPreview,
   }));
 }
 
@@ -143,20 +143,33 @@ export async function POST(req: NextRequest) {
   try {
     let sessionId = incomingSessionId ?? null;
 
+    // If sessionId provided, validate it exists and belongs to user for this document
     if (sessionId) {
       const existing = await getChatSession(user.id, sessionId);
-      const existingDocumentId = (existing as { document_id?: string } | null)
-        ?.document_id;
-
-      if (!existing || existingDocumentId !== documentId) {
+      
+      // Session not found or doesn't belong to this user -> create new session
+      if (!existing) {
+        sessionId = null;
+      } 
+      // Session exists but for a different document -> create new session
+      else if (existing.document_id !== documentId) {
         sessionId = null;
       }
     }
 
+    // Create new session only if needed
     if (!sessionId) {
       const title = message.slice(0, 60);
       const session = await createChatSession(user.id, documentId, title);
-      sessionId = session?.id ?? null;
+      
+      if (!session?.id) {
+        return NextResponse.json(
+          { error: "Failed to create chat session. Please try again." },
+          { status: 500 },
+        );
+      }
+      
+      sessionId = session.id;
     }
 
     const cached = await findCachedAnswer({
@@ -221,7 +234,7 @@ export async function POST(req: NextRequest) {
         // Still process it since it's related
       } else {
         // No cache - check if user is actually asking about the image
-        const questionLower = message.toLowerCase();
+        const questionLower = (message ?? "").toLowerCase();
         const imageKeywords = ["image", "picture", "photo", "screenshot", "this", "what is", "show", "see", "look"];
         const seemsAskingAboutImage = imageKeywords.some(k => questionLower.includes(k));
 
@@ -387,14 +400,18 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
 
     const dbCitations: CachedCitation[] = citations.map((citation) => ({
       filename: document.filename,
-      chunk_index: citation.index,
-      content_preview: citation.snippet,
+      chunkIndex: citation.index,
+      contentPreview: citation.snippet,
     }));
 
     let assistantMessageId: string | null = null;
 
     if (sessionId) {
-      await saveMessage(sessionId, "user", message, [], imageUrl);
+      const savedUserMessage = await saveMessage(sessionId, "user", message, [], imageUrl);
+
+      if (!savedUserMessage) {
+        console.error("[chat] Failed to save user message, continuing anyway");
+      }
 
       const savedAssistantMessage = await saveMessage(
         sessionId,
@@ -402,6 +419,10 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
         text,
         dbCitations,
       );
+
+      if (!savedAssistantMessage) {
+        console.error("[chat] Failed to save assistant message");
+      }
 
       await touchChatSession(sessionId);
 

@@ -42,14 +42,12 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={toggleTheme}
-      // ✅ suppressHydrationWarning bỏ qua mismatch trên element này
       suppressHydrationWarning
-      className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-3.5 py-2 text-sm text-gray-700 shadow-sm transition hover:border-violet-300 hover:text-violet-700 dark:border-[#48505a] dark:bg-[#2c3138] dark:text-[#edf1f8] dark:hover:border-[#6670ff] dark:hover:text-white"
+      className="inline-flex items-center justify-center rounded-lg border border-stone-200 bg-stone-100 p-2 text-stone-500 transition-colors hover:border-stone-300 hover:bg-stone-200 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 dark:hover:text-stone-200"
       aria-label="Toggle theme"
       title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
       <SunMoon className="h-4 w-4" />
-      <span>Theme</span>
     </button>
   );
 }

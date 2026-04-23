@@ -179,7 +179,7 @@ export function getQACacheKey(
 // ==================== Document Chunk Cache ====================
 
 type ChunkCacheEntry = {
-  chunk_index: number;
+  chunkIndex: number;
   content: string;
   embedding: number[];
 };

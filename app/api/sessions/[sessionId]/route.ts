@@ -1,7 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
-import { deleteChatSession } from "@/lib/sessions";
+import { deleteChatSession, getChatSession } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +25,16 @@ export async function DELETE(
     return NextResponse.json(
       { error: "Session id is required." },
       { status: 400 },
+    );
+  }
+
+  // Verify session exists and belongs to user
+  const session = await getChatSession(user.id, sessionId);
+  
+  if (!session) {
+    return NextResponse.json(
+      { error: "Session not found." },
+      { status: 404 },
     );
   }
 

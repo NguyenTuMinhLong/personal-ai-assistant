@@ -17,6 +17,7 @@ export async function GET(
   }
 
   const { sessionId } = await params;
+  
   const session = await getChatSession(user.id, sessionId);
 
   if (!session) {
@@ -28,5 +29,32 @@ export async function GET(
     listSessionAnnotations(user.id, sessionId),
   ]);
 
-  return NextResponse.json({ messages, annotations });
+  // Transform to snake_case for UI compatibility
+  const transformedMessages = messages.map((msg) => ({
+    id: msg.id,
+    role: msg.role,
+    content: msg.content,
+    image_url: msg.imageUrl ?? null,
+    citations: msg.citations ?? [],
+    created_at: msg.created_at,
+  }));
+
+  const transformedAnnotations = annotations.map((ann) => ({
+    id: ann.id,
+    user_id: ann.userId,
+    session_id: ann.sessionId,
+    document_id: ann.documentId,
+    message_id: ann.messageId,
+    note_content: ann.noteContent,
+    highlight_color: ann.highlightColor,
+    selection_start: ann.selectionStart,
+    selection_end: ann.selectionEnd,
+    created_at: ann.createdAt,
+    updated_at: ann.updatedAt,
+  }));
+
+  return NextResponse.json({ 
+    messages: transformedMessages, 
+    annotations: transformedAnnotations 
+  });
 }

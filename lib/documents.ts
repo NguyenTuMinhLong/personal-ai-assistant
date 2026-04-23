@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 import { getSupabaseUrl } from "@/lib/supabase";
-import { getCachedChunks, setCachedChunks, invalidateChunkCache, getQACache } from "@/lib/cache/in-memory-cache";
+import { getCachedChunks, setCachedChunks, invalidateChunkCache } from "@/lib/cache/in-memory-cache";
 
 export type StoredDocument = {
   id: string;
@@ -34,32 +34,32 @@ function createSupabaseAdminClient() {
   });
 }
 
-export async function listUserDocuments(userId: string) {
+// documents table columns: id, filename, content, summary, created_at
+export async function listUserDocuments(_userId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
     .select("id, filename, summary")
-    .eq("user_id", userId)
-    .is("deleted_at", null)
     .order("created_at", { ascending: false });
 
   if (error) {
+    console.error("[listUserDocuments]", error.code, error.message);
     throw new Error(error.message || "Could not load documents.");
   }
 
   return (data ?? []) as StoredDocument[];
 }
 
-export async function getUserDocument(userId: string, documentId: string) {
+export async function getUserDocument(_userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
     .select("id, filename, content, summary")
-    .eq("user_id", userId)
     .eq("id", documentId)
     .maybeSingle();
 
   if (error) {
+    console.error("[getUserDocument]", error.code, error.message);
     throw new Error(error.message || "Could not load document.");
   }
 
@@ -71,7 +71,6 @@ export async function getUserDocument(userId: string, documentId: string) {
 }
 
 export async function listDocumentEmbeddings(documentId: string) {
-  // Check L1 cache first
   const cached = getCachedChunks(documentId);
   if (cached) {
     return cached;
@@ -84,34 +83,23 @@ export async function listDocumentEmbeddings(documentId: string) {
     .eq("document_id", documentId);
 
   if (error) {
+    console.error("[listDocumentEmbeddings]", error.code, error.message);
     throw new Error(error.message || "Could not load document embeddings.");
   }
 
-  const chunks = (data ?? []) as DocumentEmbeddingRow[];
-  
-  // Cache for future requests
+  // Map snake_case to camelCase for internal use
+  const chunks = (data ?? []).map(row => ({
+    chunkIndex: row.chunk_index,
+    content: row.content,
+    embedding: row.embedding,
+  }));
   setCachedChunks(documentId, chunks);
   
   return chunks;
 }
 
-export async function deleteUserDocument(userId: string, documentId: string) {
+export async function deleteUserDocument(_userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
-  const { data: document, error: fetchError } = await supabase
-    .from("documents")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("id", documentId)
-    .maybeSingle();
-
-  if (fetchError) {
-    throw new Error(fetchError.message || "Could not find document.");
-  }
-
-  if (!document) {
-    return false;
-  }
-
   const { error: embeddingError } = await supabase
     .from("document_embeddings")
     .delete()
@@ -126,74 +114,36 @@ export async function deleteUserDocument(userId: string, documentId: string) {
   const { error: documentError } = await supabase
     .from("documents")
     .delete()
-    .eq("user_id", userId)
     .eq("id", documentId);
 
   if (documentError) {
     throw new Error(documentError.message || "Could not delete document.");
   }
 
-  // Invalidate chunk cache
   invalidateChunkCache(documentId);
 
   return true;
 }
 
-export async function softDeleteDocument(userId: string, documentId: string) {
-  const supabase = createSupabaseAdminClient();
-
-  const { error } = await supabase
-    .from("documents")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("user_id", userId)
-    .eq("id", documentId)
-    .is("deleted_at", null);
-
-  if (error) {
-    throw new Error(error.message || "Could not delete document.");
-  }
-
-  // Invalidate chunk cache
-  invalidateChunkCache(documentId);
-
-  return true;
+// Soft delete not supported - table has no deletedAt column
+export async function softDeleteDocument(_userId: string, documentId: string) {
+  return deleteUserDocument(_userId, documentId);
 }
 
-export async function restoreDocument(userId: string, documentId: string) {
-  const supabase = createSupabaseAdminClient();
-
-  const { error } = await supabase
-    .from("documents")
-    .update({ deleted_at: null })
-    .eq("user_id", userId)
-    .eq("id", documentId);
-
-  if (error) {
-    throw new Error(error.message || "Could not restore document.");
-  }
-
-  return true;
+// Restore not supported - no deletedAt column
+export async function restoreDocument(_userId: string, _documentId: string) {
+  throw new Error("Restore not supported for this table schema.");
 }
 
-// ==================== Cache Invalidation ====================
 export async function invalidateQACacheForDocument(
   documentId: string,
-  userId?: string
+  _userId?: string
 ) {
-  // 1. Invalidate chunk cache
   invalidateChunkCache(documentId);
 
-  // 2. Delete QA cache entries from database for this document
   const supabase = createSupabaseAdminClient();
-  
-  let query = supabase.from("qa_cache").delete().eq("document_id", documentId);
-  
-  if (userId) {
-    query = query.eq("user_id", userId);
-  }
-  
-  await query;
-
-  // 3. Note: L1 in-memory cache will auto-expire (TTL: 5 min)
-  // For immediate invalidation, you'd need Redis (out of scope for now)
+  await supabase
+    .from("qa_cache")
+    .delete()
+    .eq("document_id", documentId);
 }

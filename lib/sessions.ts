@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 import { getSupabaseUrl } from "@/lib/supabase";
 import type { ChatSession, Message } from "@/types";
 
-// ✅ Dùng admin client giống lib/documents.ts
 function createSupabaseAdminClient() {
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseServiceRoleKey) {
@@ -15,6 +14,7 @@ function createSupabaseAdminClient() {
 }
 
 // ─── Sessions ────────────────────────────────────────────────
+// chat_sessions columns: id, user_id, document_id, title, created_at, updated_at
 
 export async function createChatSession(
   userId: string,
@@ -29,7 +29,7 @@ export async function createChatSession(
     .single();
 
   if (error) {
-    console.error("[createChatSession]", error.message);
+    console.error("[createChatSession]", error.code, error.message);
     return null;
   }
 
@@ -41,27 +41,42 @@ export async function listChatSessions(
   documentId?: string,
 ): Promise<ChatSession[]> {
   const supabase = createSupabaseAdminClient();
-  let query = supabase
+  
+  // Get sessions with user filter
+  let sessionsQuery = supabase
     .from("chat_sessions")
-    .select("*, documents:document_id (filename)")
+    .select("id, document_id, title, created_at, updated_at")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
     .limit(30);
 
   if (documentId) {
-    query = query.eq("document_id", documentId);
+    sessionsQuery = sessionsQuery.eq("document_id", documentId);
   }
 
-  const { data, error } = await query;
+  const { data: sessions, error } = await sessionsQuery;
 
   if (error) {
-    console.error("[listChatSessions]", error.message);
+    console.error("[listChatSessions]", error.code, error.message);
     return [];
   }
 
-  return (data ?? []).map((session) => ({
+  if (!sessions?.length) {
+    return [];
+  }
+
+  // Get document filenames separately
+  const docIds = [...new Set(sessions.map(s => s.document_id))];
+  const { data: docs } = await supabase
+    .from("documents")
+    .select("id, filename")
+    .in("id", docIds);
+
+  const docMap = new Map((docs ?? []).map(d => [d.id, d.filename]));
+
+  return sessions.map(session => ({
     ...session,
-    document_name: (session.documents as { filename?: string } | null)?.filename,
+    document_name: docMap.get(session.document_id),
   })) as ChatSession[];
 }
 
@@ -77,7 +92,10 @@ export async function getChatSession(
     .eq("user_id", userId)
     .single();
 
-  if (error) return null;
+  if (error) {
+    console.log("[getChatSession]", error.code, error.message);
+    return null;
+  }
   return data as ChatSession;
 }
 
@@ -91,11 +109,37 @@ export async function touchChatSession(sessionId: string) {
 
 export async function deleteChatSession(userId: string, sessionId: string) {
   const supabase = createSupabaseAdminClient();
+  
+  // Verify session exists
+  const { error: fetchError } = await supabase
+    .from("chat_sessions")
+    .select("id")
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .single();
+  
+  if (fetchError) {
+    throw new Error("Session not found or access denied.");
+  }
+  
+  // Delete annotations
+  await supabase
+    .from("message_annotations")
+    .delete()
+    .eq("session_id", sessionId);
+  
+  // Delete messages
+  await supabase
+    .from("messages")
+    .delete()
+    .eq("session_id", sessionId);
+  
+  // Delete session
   const { error } = await supabase
     .from("chat_sessions")
     .delete()
-    .eq("user_id", userId)
-    .eq("id", sessionId);
+    .eq("id", sessionId)
+    .eq("user_id", userId);
 
   if (error) {
     throw new Error(error.message || "Could not delete session.");
@@ -104,23 +148,25 @@ export async function deleteChatSession(userId: string, sessionId: string) {
 }
 
 // ─── Messages ────────────────────────────────────────────────
+// messages columns: id, session_id, role, content, citations, created_at
 
 export async function saveMessage(
   sessionId: string,
   role: "user" | "assistant",
   content: string,
   citations: Message["citations"] = [],
-  imageUrl?: string | null,
+  _imageUrl?: string | null,
 ): Promise<Message | null> {
   const supabase = createSupabaseAdminClient();
+  
   const { data, error } = await supabase
     .from("messages")
-    .insert({ session_id: sessionId, role, content, citations, image_url: imageUrl ?? null })
+    .insert({ session_id: sessionId, role, content, citations })
     .select()
     .single();
 
   if (error) {
-    console.error("[saveMessage]", error.message);
+    console.error("[saveMessage]", error.code, error.message);
     return null;
   }
 
@@ -129,6 +175,7 @@ export async function saveMessage(
 
 export async function listMessages(sessionId: string): Promise<Message[]> {
   const supabase = createSupabaseAdminClient();
+  
   const { data, error } = await supabase
     .from("messages")
     .select("*")
@@ -136,7 +183,7 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
     .order("created_at", { ascending: true });
 
   if (error) {
-    console.error("[listMessages]", error.message);
+    console.error("[listMessages]", error.code, error.message);
     return [];
   }
 

@@ -11,16 +11,16 @@ export type HighlightColor =
 
 export type MessageAnnotation = {
   id: string;
-  user_id: string;
-  session_id: string;
-  document_id: string;
-  message_id: string;
-  note_content: string | null;
-  highlight_color: HighlightColor | null;
-  selection_start: number | null;
-  selection_end: number | null;
-  created_at: string;
-  updated_at: string;
+  userId: string;
+  sessionId: string;
+  documentId: string;
+  messageId: string;
+  noteContent: string | null;
+  highlightColor: HighlightColor | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 function createSupabaseAdminClient() {
@@ -38,6 +38,8 @@ function createSupabaseAdminClient() {
   });
 }
 
+// message_annotations columns: id, user_id, session_id, document_id, message_id, note_content, highlight_color, selection_start, selection_end, created_at, updated_at
+
 export async function listSessionAnnotations(
   userId: string,
   sessionId: string,
@@ -52,7 +54,8 @@ export async function listSessionAnnotations(
     .order("created_at", { ascending: false });
 
   if (error) {
-    throw new Error(error.message || "Could not load annotations.");
+    console.error("[listSessionAnnotations]", error.code, error.message);
+    return [];
   }
 
   return (data ?? []) as MessageAnnotation[];
@@ -97,6 +100,7 @@ export async function upsertMessageAnnotation(input: {
     .single();
 
   if (error) {
+    console.error("[upsertMessageAnnotation]", error.code, error.message);
     throw new Error(error.message || "Could not save annotation.");
   }
 
@@ -116,6 +120,7 @@ export async function deleteMessageAnnotation(
     .eq("message_id", messageId);
 
   if (error) {
+    console.error("[deleteMessageAnnotation]", error.code, error.message);
     throw new Error(error.message || "Could not delete annotation.");
   }
 

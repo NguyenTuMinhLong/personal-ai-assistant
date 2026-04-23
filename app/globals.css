@@ -1,55 +1,59 @@
+/* Tailwind CSS */
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Aloa-inspired design system */
+/* Refined Coffee Shop-inspired design system - Warm, Sophisticated */
+
 :root {
-  /* Backgrounds */
-  --background: #ffffff;
-  --background-subtle: #f8f9fc;
-  --foreground: #0f1117;
-  --foreground-muted: #6b7280;
+  /* Backgrounds - Soft muted warm gray */
+  --background: #F5F5F4;
+  --background-subtle: #FAFAF9;
+  --foreground: #1C1917;
+  --foreground-muted: #78716C;
   
-  /* Surfaces */
-  --surface: #ffffff;
-  --surface-muted: #f3f4f8;
-  --surface-elevated: #ffffff;
+  /* Surfaces - Subtle warm white */
+  --surface: #FAFAF9;
+  --surface-muted: #F0EFED;
+  --surface-elevated: #FFFFFF;
   
-  /* Borders */
-  --border: #e5e7eb;
-  --border-muted: #f3f4f6;
+  /* Borders - Soft stone */
+  --border: #E5E4E2;
+  --border-muted: #EDECEA;
   
-  /* Brand colors - Violet gradient */
-  --primary: #7c3aed;
-  --primary-hover: #6d28d9;
-  --primary-light: #ede9fe;
-  --primary-foreground: #ffffff;
+  /* Brand colors - Subtle warm accent */
+  --primary: #78716C;
+  --primary-hover: #57534E;
+  --primary-light: #F5F5F4;
+  --primary-foreground: #FFFFFF;
   
-  /* Accent colors */
-  --accent-violet: #8b5cf6;
-  --accent-fuchsia: #d946ef;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
-  --accent-sky: #0ea5e9;
+  /* Accent colors - Muted warm palette */
+  --accent-amber: #B45309;
+  --accent-orange: #C2410C;
+  --accent-copper: #92400E;
+  --accent-cream: #FEF3C7;
   
   /* Semantic colors */
-  --success: #10b981;
-  --warning: #f59e0b;
-  --error: #ef4444;
+  --success: #059669;
+  --warning: #D97706;
+  --error: #DC2626;
   
-  /* Shadows */
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-  --shadow-glow: 0 0 20px rgb(124 58 237 / 0.15);
+  /* Shadows - Subtle neutral */
+  --shadow-sm: 0 1px 2px 0 rgba(28, 25, 23, 0.04);
+  --shadow-md: 0 2px 4px -1px rgba(28, 25, 23, 0.04), 0 1px 2px -2px rgba(28, 25, 23, 0.03);
+  --shadow-lg: 0 4px 8px -2px rgba(28, 25, 23, 0.05), 0 2px 4px -2px rgba(28, 25, 23, 0.03);
+  --shadow-xl: 0 8px 16px -4px rgba(28, 25, 23, 0.06), 0 4px 8px -4px rgba(28, 25, 23, 0.04);
+  --shadow-glow: 0 0 20px rgba(120, 113, 108, 0.08);
   
-  /* Radii */
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.5rem;
-  --radius-2xl: 2rem;
+  /* Radii - Clean and modern */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  
+  /* Typography */
+  --font-heading: 'Cormorant Garamond', Georgia, serif;
+  --font-body: 'Source Sans 3', system-ui, -apple-system, sans-serif;
 }
 
 html {
@@ -57,33 +61,33 @@ html {
 }
 
 html.dark {
-  /* Backgrounds */
-  --background: #0f1117;
-  --background-subtle: #16181f;
-  --foreground: #f9fafb;
-  --foreground-muted: #9ca3af;
+  /* Backgrounds - Dark warm gray */
+  --background: #1C1917;
+  --background-subtle: #292524;
+  --foreground: #FAFAF9;
+  --foreground-muted: #A8A29E;
   
   /* Surfaces */
-  --surface: #1a1c24;
-  --surface-muted: #23262f;
-  --surface-elevated: #1f212a;
+  --surface: #292524;
+  --surface-muted: #1C1917;
+  --surface-elevated: #3D3835;
   
   /* Borders */
-  --border: #2d303a;
-  --border-muted: #262830;
+  --border: #44403C;
+  --border-muted: #292524;
   
-  /* Brand colors - Dark mode adjustments */
-  --primary: #8b5cf6;
-  --primary-hover: #7c3aed;
-  --primary-light: #3b2d5c;
-  --primary-foreground: #ffffff;
+  /* Brand colors - Warm orange for dark mode */
+  --primary: #FB923C;
+  --primary-hover: #FDBA74;
+  --primary-light: #431407;
+  --primary-foreground: #FFFFFF;
   
   /* Shadows - Dark mode */
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.4);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.4);
-  --shadow-glow: 0 0 30px rgb(139 92 246 / 0.2);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 30px rgba(251, 146, 60, 0.15);
   
   color-scheme: dark;
 }
@@ -102,22 +106,28 @@ html.dark {
   --color-primary-hover: var(--primary-hover);
   --color-primary-light: var(--primary-light);
   --color-primary-foreground: var(--primary-foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-body);
+  --font-mono: ui-monospace, monospace;
 }
 
 /* Base styles */
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Selection styling */
+/* Elegant headings with serif font */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading), Georgia, serif;
+  font-weight: 600;
+}
+
+/* Selection styling - subtle muted tint */
 body::selection {
-  background: rgba(124, 58, 237, 0.2);
+  background: rgba(120, 113, 108, 0.15);
 }
 
 /* Smooth scrolling */
@@ -125,13 +135,13 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Focus visible styling */
+/* Focus visible styling - warm coffee brown */
 *:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar - warm tones */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -152,38 +162,74 @@ html {
 
 /* Dark mode scrollbar */
 html.dark ::-webkit-scrollbar-thumb {
-  background: #3d4251;
+  background: #4A3D33;
 }
 
 html.dark ::-webkit-scrollbar-thumb:hover {
-  background: #4d5363;
+  background: #5A4D43;
 }
 
-/* Glass effect utility */
+/* Glass effect utility - warm tint */
 .glass {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 252, 248, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
 
 html.dark .glass {
-  background: rgba(26, 28, 36, 0.8);
+  background: rgba(41, 37, 36, 0.9);
 }
 
-/* Gradient text utility */
+/* Warm gradient text utility */
 .gradient-text {
-  background: linear-gradient(135deg, var(--accent-violet), var(--accent-fuchsia));
+  background: linear-gradient(135deg, var(--accent-amber), var(--accent-caramel));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* Glow effect utility */
+/* Warm glow effect */
 .glow {
   box-shadow: var(--shadow-glow);
 }
 
-/* Subtle animation for hover states */
+/* Subtle animation for hover states - warm easing */
 .transition-smooth {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Paper texture overlay utility */
+.paper-texture {
+  position: relative;
+}
+
+.paper-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* Coffee stain decorative element */
+.coffee-stain {
+  position: relative;
+}
+
+.coffee-stain::after {
+  content: '';
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(139, 90, 43, 0.03) 70%, rgba(139, 90, 43, 0.06) 100%);
+  pointer-events: none;
+  transform: rotate(-15deg);
+}
+
+/* Warm shadow utility */
+.shadow-warm {
+  box-shadow: 0 4px 20px rgba(45, 27, 14, 0.08);
 }
