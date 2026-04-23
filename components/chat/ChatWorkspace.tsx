@@ -63,6 +63,8 @@ type ChatWorkspaceProps = {
   documents: StoredDocument[];
   initialDocumentId: string | null;
   initialSessionId: string | null;
+  initialMessages?: ChatMessage[];
+  initialNotes?: SavedNote[];
 };
 
 const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
@@ -157,7 +159,7 @@ const MessageActions = memo(function MessageActions({
 
       {/* Copy button */}
       <button
-        onClick={() => onCopy(message.content, message.id)}
+        onClick={() => onCopy(message.content ?? "", message.id)}
         className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
       >
         {isCopied ? (
@@ -175,6 +177,7 @@ const MessageActions = memo(function MessageActions({
 
       {/* Save note */}
       <button
+        data-testid="save-note-btn"
         type="button"
         onClick={() => onToggleNote(message.id)}
         className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
@@ -244,6 +247,7 @@ const MessageBubble = memo(function MessageBubble({
 
   return (
     <div
+      data-testid="chat-message"
       ref={(element) => {
         if (element && isFlashed) {
           onFlash(message.id);
@@ -282,7 +286,7 @@ const MessageBubble = memo(function MessageBubble({
                 Image attached
               </span>
             )}
-            {isUser && !isUser && (
+            {isUser && (
               <button
                 type="button"
                 onClick={() => onDeleteMessage(message.id)}
@@ -311,38 +315,27 @@ const MessageBubble = memo(function MessageBubble({
               />
             )}
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
-              {message.content}
+              {message.content ?? ""}
             </p>
           </div>
 
           {/* Citations */}
-          {!isUser && message.citations && message.citations.length > 0 && (
+          {!isUser && Array.isArray(message.citations) && message.citations.length > 0 && (
             <div className="mt-1.5">
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800/50">
-                {(() => {
-                  const safe = Array.isArray(message.citations) ? message.citations.slice(0, 3) : [];
-                  if (process.env.NODE_ENV === "development") {
-                    console.log("[citations debug]", { citations: message.citations, isArray: Array.isArray(message.citations), safe });
-                  }
-                  return safe.map((citation, _ci) => {
-                    if (process.env.NODE_ENV === "development") {
-                      console.log("[citation debug]", { citation, type: typeof citation, snippetVal: citation?.snippet });
-                    }
-                    return (
-                    <div
-                      key={citation.index}
-                      className="mb-0.5 flex items-center gap-1.5"
-                    >
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-stone-200 text-[9px] font-bold text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                        {citation.index}
-                      </span>
-                      <span className="text-[10px] text-stone-500 dark:text-stone-500">
-                        {(citation.snippet ?? "").slice(0, 40)}...
-                      </span>
-                    </div>
-                    );
-                  });
-                })()}
+                {message.citations.slice(0, 3).map((citation) => (
+                  <div
+                    key={citation.index}
+                    className="mb-0.5 flex items-center gap-1.5"
+                  >
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-stone-200 text-[9px] font-bold text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                      {citation.index}
+                    </span>
+                    <span className="text-[10px] text-stone-500 dark:text-stone-500">
+                      {(citation.snippet ?? "").slice(0, 40)}...
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -391,13 +384,15 @@ export function ChatWorkspace({
   documents,
   initialDocumentId,
   initialSessionId,
+  initialMessages,
+  initialNotes,
 }: ChatWorkspaceProps) {
   // Track current session ID - starts from props but can be updated
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(initialSessionId);
   
   // Only keep messages and notes in local state - use props as source of truth
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [notes, setNotes] = useState<SavedNote[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages ?? []);
+  const [notes, setNotes] = useState<SavedNote[]>(() => initialNotes ?? []);
   const [input, setInput] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -409,17 +404,21 @@ export function ChatWorkspace({
   const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [highlightMode, setHighlightMode] = useState(false);
-  const [noteIds, setNoteIds] = useState<Set<string>>(new Set());
+  const [noteIds, setNoteIds] = useState<Set<string>>(
+    () => new Set((initialNotes ?? []).map((n) => n.messageId))
+  );
 
   const router = useRouter();
-  
+
   // Refs for refs and flags
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const contentRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLoadingRef = useRef(false);
-  const loadedSessionRef = useRef<string | null>(null);
+  const loadedSessionRef = useRef<string | null>(
+    initialMessages && initialSessionId ? initialSessionId : null
+  );
 
   // Sync with URL params when they change
   useEffect(() => {
@@ -463,10 +462,15 @@ export function ChatWorkspace({
     });
   }, []);
 
-  // Handle text selection for excerpts
+  // Handle text selection for excerpts — debounced so selecting doesn't spam toasts
+  const toastShownRef = useRef<Set<string>>(new Set());
+
   const handleSelectExcerpt = useCallback((messageId: string, text: string) => {
     setSelectedExcerpt({ messageId, text });
-    toast.info("Selection saved! Click 'Save selection' to save as a note.");
+    if (!toastShownRef.current.has(messageId)) {
+      toastShownRef.current.add(messageId);
+      toast.info("Selection saved! Click 'Save selection' to save as a note.");
+    }
   }, []);
 
   // Flash animation for new messages
@@ -515,8 +519,30 @@ export function ChatWorkspace({
       if (!res.ok || !payload?.success) {
         throw new Error(payload?.error || "Could not save annotation.");
       }
+
+      // Reset excerpt selection so toast can fire again for this message
+      setSelectedExcerpt((prev) => (prev?.messageId === messageId ? null : prev));
+      toastShownRef.current.delete(messageId);
     },
     [initialSessionId, selectedExcerpt],
+  );
+
+  // Toggle note — uses functional updates so deps stay stable
+  const handleToggleNote = useCallback(
+    async (messageId: string) => {
+      const existingNote = notes.find((n) => n.messageId === messageId);
+      if (existingNote) {
+        setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+        toast.success("Note removed");
+      } else {
+        await handleSaveAnnotation(messageId, null);
+        const newNote: SavedNote = { id: createMessageId(), messageId };
+        setNotes((prev) => [...prev, newNote]);
+        handleFlash(messageId);
+        toast.success("Note saved!");
+      }
+    },
+    [handleSaveAnnotation, handleFlash, notes],
   );
 
   // Handle highlight message
@@ -532,27 +558,6 @@ export function ChatWorkspace({
       toast.success("Highlight saved!");
     },
     [handleSaveAnnotation],
-  );
-
-  // Toggle note
-  const handleToggleNote = useCallback(
-    async (messageId: string) => {
-      const message = messages.find((m) => m.id === messageId);
-      if (!message) return;
-
-      const existingNote = notes.find((n) => n.messageId === messageId);
-      if (existingNote) {
-        setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
-        toast.success("Note removed");
-      } else {
-        await handleSaveAnnotation(messageId, null);
-        const newNote: SavedNote = { id: createMessageId(), messageId };
-        setNotes((prev) => [...prev, newNote]);
-        handleFlash(messageId);
-        toast.success("Note saved!");
-      }
-    },
-    [messages, notes, handleSaveAnnotation, handleFlash],
   );
 
   // Build notes from annotations
@@ -633,8 +638,8 @@ export function ChatWorkspace({
         setNotes(buildNotesFromAnnotations(data.annotations ?? []));
         loadedSessionRef.current = currentSessionId;
 
-        // Use setTimeout to ensure DOM has rendered
-        setTimeout(() => scrollToLatest("auto"), 100);
+        // Scroll to bottom after state updates
+        requestAnimationFrame(() => scrollToLatest("auto"));
       })
       .catch((error) => {
         console.error("Failed to load chat history:", error);
@@ -686,7 +691,7 @@ export function ChatWorkspace({
       try {
         const formData = new FormData();
         formData.append("file", selectedImage);
-        const res = await fetch("/api/upload", {
+        const res = await fetch("/api/chat-images", {
           method: "POST",
           body: formData,
         });
@@ -838,6 +843,7 @@ export function ChatWorkspace({
                 <a
                   key={doc.id}
                   href={`/chat?documentId=${doc.id}`}
+                  data-testid="document-item"
                   className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all ${
                     doc.id === currentDocumentId
                       ? "bg-stone-200 font-medium text-stone-900 dark:bg-stone-800 dark:text-white"
@@ -878,7 +884,7 @@ export function ChatWorkspace({
                     >
                       <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-stone-400" />
                       <span className="truncate text-stone-600 dark:text-stone-300">
-                        {message.content.slice(0, 40)}...
+                        {(message.content ?? "").slice(0, 40)}...
                       </span>
                     </button>
                   );
@@ -1060,6 +1066,7 @@ export function ChatWorkspace({
 
               {/* Text input */}
               <input
+                data-testid="chat-input"
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

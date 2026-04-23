@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 
 import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { listUserDocuments } from "@/lib/documents";
-import { getChatSession } from "@/lib/sessions";
+import { getChatSession, listMessages } from "@/lib/sessions";
+import { listSessionAnnotations } from "@/lib/annotations";
 
 type ChatPageProps = {
   searchParams: Promise<{
@@ -21,7 +22,6 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
     redirect("/sign-in");
   }
 
-  const documents = await listUserDocuments(user.id);
   const params = await searchParams;
 
   const documentIdParam = params.documentId;
@@ -29,23 +29,31 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   const sessionId =
     typeof sessionIdParam === "string" ? sessionIdParam : null;
 
-  // If we have a sessionId but no documentId, look up the document from the session
+  // Fetch documents and (optionally) session data in parallel
+  const [documents, sessionData] = await Promise.all([
+    listUserDocuments(user.id),
+    sessionId
+      ? Promise.all([
+          getChatSession(user.id, sessionId),
+          listMessages(sessionId),
+          listSessionAnnotations(user.id, sessionId),
+        ])
+      : Promise.resolve([null, [], []]),
+  ]);
+
+  const [session, initialMessages, initialAnnotations] = sessionData;
+
+  // Determine which document to show
   let initialDocumentId: string | null = null;
 
   if (typeof documentIdParam === "string" && documentIdParam) {
-    // documentId provided - validate it exists
     initialDocumentId = documents.some((doc) => doc.id === documentIdParam)
       ? documentIdParam
       : null;
-  } else if (sessionId) {
-    // No documentId but have sessionId - fetch session to get document_id
-    const session = await getChatSession(user.id, sessionId);
-    if (session) {
-      // Check if the session's document exists in user's documents
-      initialDocumentId = documents.some((doc) => doc.id === session.document_id)
-        ? session.document_id
-        : null;
-    }
+  } else if (session) {
+    initialDocumentId = documents.some((doc) => doc.id === session.document_id)
+      ? session.document_id
+      : null;
   }
 
   // Fallback to first document only if no document could be determined
@@ -53,11 +61,33 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
     initialDocumentId = documents[0].id;
   }
 
+  // Transform server messages + annotations into the shape ChatWorkspace expects
+  const transformedMessages = initialMessages.map((msg, index) => ({
+    id: msg.id,
+    role: msg.role,
+    content: msg.content,
+    imageUrl: msg.imageUrl ?? null,
+    citations: (msg.citations ?? []).map((c, i) => ({
+      index: i + 1,
+      snippet: c.contentPreview ?? "",
+    })),
+    highlightColor: null,
+    selectionStart: null,
+    selectionEnd: null,
+  }));
+
+  const transformedAnnotations = initialAnnotations.map((ann) => ({
+    id: ann.id,
+    messageId: ann.messageId,
+  }));
+
   return (
     <ChatWorkspace
       documents={documents}
       initialDocumentId={initialDocumentId}
       initialSessionId={sessionId}
+      initialMessages={transformedMessages}
+      initialNotes={transformedAnnotations}
     />
   );
 }

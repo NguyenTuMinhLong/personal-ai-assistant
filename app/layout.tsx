@@ -24,8 +24,8 @@ export default function RootLayout({
           <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
           <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Source+Sans+3:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
         </head>
-        <body>
-          <Script id="theme-script" strategy="beforeInteractive">{`
+        <body suppressHydrationWarning>
+          <Script id="theme-script" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: `
             (function () {
               try {
                 var theme = localStorage.getItem("secondbrain-theme") === "dark" ? "dark" : "light";
@@ -33,7 +33,7 @@ export default function RootLayout({
                 document.documentElement.style.colorScheme = theme;
               } catch (error) {}
             })();
-          `}</Script>
+          ` }} />
           <div className="fixed right-4 top-4 z-50">
             <ThemeToggle />
           </div>

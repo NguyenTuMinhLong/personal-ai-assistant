@@ -158,10 +158,11 @@ export async function saveMessage(
   _imageUrl?: string | null,
 ): Promise<Message | null> {
   const supabase = createSupabaseAdminClient();
-  
+  fetch('http://127.0.0.1:7702/ingest/d3a58fcc-6d4a-4e7e-8e0f-d2ead933442d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9324ab'},body:JSON.stringify({sessionId:'9324ab',location:'sessions.ts:saveMessage',message:'_imageUrl param',data:{imageUrl:_imageUrl,sessionId,role},timestamp:Date.now()})}).catch(()=>{});
+
   const { data, error } = await supabase
     .from("messages")
-    .insert({ session_id: sessionId, role, content, citations })
+    .insert({ session_id: sessionId, role, content, citations, image_url: _imageUrl })
     .select()
     .single();
 
@@ -169,19 +170,24 @@ export async function saveMessage(
     console.error("[saveMessage]", error.code, error.message);
     return null;
   }
+  fetch('http://127.0.0.1:7702/ingest/d3a58fcc-6d4a-4e7e-8e0f-d2ead933442d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9324ab'},body:JSON.stringify({sessionId:'9324ab',location:'sessions.ts:saveMessageResult',message:'DB insert result',data:{id:data?.id,image_url:(data as Record<string,unknown>)?.image_url},timestamp:Date.now()})}).catch(()=>{});
 
   return data as Message;
 }
 
 export async function listMessages(sessionId: string): Promise<Message[]> {
   const supabase = createSupabaseAdminClient();
-  
+
   const { data, error } = await supabase
     .from("messages")
     .select("*")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: true });
 
+  // DEBUG: trace raw rows from DB for image_url
+  if (data && data.length > 0) {
+    fetch('http://127.0.0.1:7702/ingest/d3a58fcc-6d4a-4e7e-8e0f-d2ead933442d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9324ab'},body:JSON.stringify({sessionId:'9324ab',location:'sessions.ts:listMessages',message:'DB rows image_url',data:{sessionId,count:data.length,imageUrls:data.map((r:Record<string,unknown>)=>r.image_url)},timestamp:Date.now()})}).catch(()=>{});
+  }
   if (error) {
     console.error("[listMessages]", error.code, error.message);
     return [];
