@@ -14,7 +14,7 @@ function createSupabaseAdminClient() {
 }
 
 // ─── Sessions ────────────────────────────────────────────────
-// chat_sessions columns: id, user_id, document_id, title, created_at, updated_at
+// chat_sessions columns: id, user_id, document_id, title, is_pinned, created_at, updated_at
 
 export async function createChatSession(
   userId: string,
@@ -45,7 +45,7 @@ export async function listChatSessions(
   // Get sessions with user filter
   let sessionsQuery = supabase
     .from("chat_sessions")
-    .select("id, document_id, title, created_at, updated_at")
+    .select("id, document_id, title, is_pinned, created_at, updated_at")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
     .limit(30);
@@ -105,6 +105,25 @@ export async function touchChatSession(sessionId: string) {
     .from("chat_sessions")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", sessionId);
+}
+
+export async function updateSessionPin(
+  userId: string,
+  sessionId: string,
+  isPinned: boolean,
+) {
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase
+    .from("chat_sessions")
+    .update({ is_pinned: isPinned, updated_at: new Date().toISOString() })
+    .eq("id", sessionId)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("[updateSessionPin]", error.code, error.message);
+    throw new Error(error.message || "Could not update session pin.");
+  }
+  return true;
 }
 
 export async function deleteChatSession(userId: string, sessionId: string) {
@@ -171,11 +190,17 @@ export async function saveMessage(
   }
 
   // Map snake_case DB response to camelCase Message type
-  const message: Message = {
-    ...(data as Record<string, unknown>),
-    imageUrl: (data as Record<string, unknown>).image_url ?? null,
+  const imageUrlVal = (data as Record<string, unknown>).image_url;
+  const mapped: Message = {
+    id: String(data.id),
+    session_id: String(data.session_id),
+    role: data.role as "user" | "assistant",
+    content: String(data.content ?? ""),
+    imageUrl: typeof imageUrlVal === "string" ? imageUrlVal : null,
+    citations: Array.isArray(data.citations) ? data.citations : [],
+    created_at: String(data.created_at ?? ""),
   };
-  return message;
+  return mapped;
 }
 
 export async function listMessages(sessionId: string): Promise<Message[]> {
@@ -192,10 +217,18 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
     return [];
   }
 
-  return (data ?? []).map((row) => ({
-    ...(row as Record<string, unknown>),
-    imageUrl: (row as Record<string, unknown>).image_url ?? null,
-  })) as Message[];
+  return (data ?? []).map((row) => {
+    const imageUrlVal = (row as Record<string, unknown>).image_url;
+    return {
+      id: String(row.id),
+      session_id: String(row.session_id),
+      role: row.role as "user" | "assistant",
+      content: String(row.content ?? ""),
+      imageUrl: typeof imageUrlVal === "string" ? imageUrlVal : null,
+      citations: Array.isArray(row.citations) ? row.citations : [],
+      created_at: String(row.created_at ?? ""),
+    };
+  }) as Message[];
 }
 
 export async function getSessionMessage(

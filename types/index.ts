@@ -24,6 +24,7 @@ export type ChatSession = {
   created_at: string;
   updated_at: string;
   document_name?: string;
+  is_pinned?: boolean;
 };
 
 export type Message = {

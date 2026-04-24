@@ -39,7 +39,7 @@ function createSupabaseAdminClient() {
   });
 }
 
-// message_annotations columns: id, user_id, session_id, document_id, message_id, note_content, highlight_color, selection_start, selection_end, created_at, updated_at
+// message_annotations columns: id, user_id, session_id, document_id, message_id, note_content, highlight_color, selection_start, selection_end, is_pinned, created_at, updated_at
 
 export async function listSessionAnnotations(
   userId: string,
@@ -59,7 +59,10 @@ export async function listSessionAnnotations(
     return [];
   }
 
-  return (data ?? []) as MessageAnnotation[];
+  return (data ?? []).map((row) => ({
+    ...(row as Record<string, unknown>),
+    isPinned: (row as Record<string, unknown>).is_pinned ?? false,
+  })) as MessageAnnotation[];
 }
 
 export async function upsertMessageAnnotation(input: {
@@ -71,6 +74,7 @@ export async function upsertMessageAnnotation(input: {
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
+  isPinned?: boolean;
 }): Promise<MessageAnnotation | null> {
   const supabase = createSupabaseAdminClient();
 
@@ -91,6 +95,7 @@ export async function upsertMessageAnnotation(input: {
         highlight_color: highlightColor,
         selection_start: selectionStart,
         selection_end: selectionEnd,
+        is_pinned: input.isPinned ?? false,
         updated_at: new Date().toISOString(),
       },
       {

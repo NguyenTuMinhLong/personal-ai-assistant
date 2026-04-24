@@ -140,6 +140,7 @@ export async function POST(req: NextRequest) {
       highlightColor,
       selectionStart,
       selectionEnd,
+      isPinned,
     });
 
     return NextResponse.json({

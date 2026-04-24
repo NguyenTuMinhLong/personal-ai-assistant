@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
+import { useChatSessions } from "@/hooks/useChatSessions";
 import type { StoredDocument } from "@/lib/documents";
 
 type Citation = {
@@ -585,6 +586,24 @@ export function ChatWorkspace({
   // ── Derived state ────────────────────────────────────────────
   const currentDocumentId = initialDocumentId;
 
+  // ── Sessions (for pinned chat feature) ──────────────────────────
+  const { sessions: chatSessions, refreshSessions } = useChatSessions(
+    currentDocumentId ?? undefined,
+  );
+
+  const pinnedSessions = useMemo(
+    () => chatSessions.filter((s) => s.is_pinned),
+    [chatSessions],
+  );
+  const unpinnedSessions = useMemo(
+    () => chatSessions.filter((s) => !s.is_pinned),
+    [chatSessions],
+  );
+  const sortedSessions = useMemo(
+    () => [...pinnedSessions, ...unpinnedSessions].slice(0, 8),
+    [pinnedSessions, unpinnedSessions],
+  );
+
   const noteIdsMap = useMemo(
     () => new Set(notes.map((note) => note.messageId)),
     [notes],
@@ -598,6 +617,10 @@ export function ChatWorkspace({
   const pinnedIds = useMemo(
     () => new Set(pinnedNotes.map((n) => n.id)),
     [pinnedNotes],
+  );
+  const unpinnedNotes = useMemo(
+    () => notes.filter((n) => !n.isPinned),
+    [notes],
   );
 
   const sortedNotes = useMemo(() => {
@@ -697,7 +720,11 @@ export function ChatWorkspace({
 
   // ── Clipboard ────────────────────────────────────────────────
   const copyToClipboard = useCallback((content: string, messageId: string) => {
-    navigator.clipboard.writeText(content);
+    navigator.clipboard
+      .write([new ClipboardItem({ "text/plain": new Blob([content], { type: "text/plain" }) })])
+      .catch(() => {
+        navigator.clipboard.writeText(content);
+      });
     setCopiedMessageId(messageId);
     setTimeout(() => setCopiedMessageId(null), 2000);
   }, []);
@@ -716,7 +743,8 @@ export function ChatWorkspace({
   const handleSaveAnnotation = useCallback(
     async (
       messageId: string,
-      highlightColor: HighlightColor | null,
+      noteContent: string | null,
+      highlightColor?: HighlightColor | null,
       selectionStart?: number | null,
       selectionEnd?: number | null,
     ) => {
@@ -731,7 +759,8 @@ export function ChatWorkspace({
         body: JSON.stringify({
           messageId,
           sessionId: currentSessionId,
-          highlightColor,
+          noteContent,
+          highlightColor: highlightColor ?? null,
           selectionStart: selectionStart ?? null,
           selectionEnd: selectionEnd ?? null,
         }),
@@ -752,6 +781,9 @@ export function ChatWorkspace({
   const handleToggleNote = useCallback(
     async (messageId: string) => {
       const existingNote = notes.find((n) => n.messageId === messageId);
+      const msg = messages.find((m) => m.id === messageId);
+      const noteContent = msg?.content ?? null;
+
       if (existingNote) {
         if (currentSessionId) {
           try {
@@ -767,7 +799,7 @@ export function ChatWorkspace({
         setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
         toast.success("Note removed");
       } else {
-        await handleSaveAnnotation(messageId, null);
+        await handleSaveAnnotation(messageId, noteContent);
         const newNote: SavedNote = { id: createMessageId(), messageId };
         setNotes((prev) => [...prev, newNote]);
         handleFlash(messageId);
@@ -775,7 +807,7 @@ export function ChatWorkspace({
         toast.success("Note saved!");
       }
     },
-    [notes, currentSessionId, handleSaveAnnotation, handleFlash, scrollToLatest],
+    [notes, messages, currentSessionId, handleSaveAnnotation, handleFlash, scrollToLatest],
   );
 
   // ── Toggle pin ───────────────────────────────────────────────
@@ -790,6 +822,8 @@ export function ChatWorkspace({
         return;
       }
 
+      const msg = messages.find((m) => m.id === note.messageId);
+
       // Optimistic update
       setNotes((prev) =>
         prev.map((n) => (n.id === noteId ? { ...n, isPinned: pinnedNow } : n)),
@@ -802,7 +836,7 @@ export function ChatWorkspace({
           body: JSON.stringify({
             messageId: note.messageId,
             sessionId: currentSessionId,
-            noteContent: null,
+            noteContent: msg?.content ?? null,
             highlightColor: null,
             isPinned: pinnedNow,
           }),
@@ -817,7 +851,7 @@ export function ChatWorkspace({
         toast.error("Failed to update pin");
       }
     },
-    [notes, currentSessionId, pinnedCount],
+    [notes, messages, currentSessionId, pinnedCount],
   );
 
   // ── Apply highlight with text selection ───────────────────────
@@ -830,7 +864,7 @@ export function ChatWorkspace({
       const selStart = sel?.selectionStart ?? null;
       const selEnd = sel?.selectionEnd ?? null;
 
-      await handleSaveAnnotation(messageId, color, selStart, selEnd);
+      await handleSaveAnnotation(messageId, null, color, selStart, selEnd);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === messageId
@@ -1145,7 +1179,7 @@ export function ChatWorkspace({
           <div className="ml-[-1px] h-full w-0.5 bg-stone-300 dark:bg-stone-600" />
         </div>
 
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col overflow-hidden">
           {/* New chat */}
           <div className="border-b border-stone-200 p-3 dark:border-stone-800">
             <button
@@ -1158,116 +1192,223 @@ export function ChatWorkspace({
             </button>
           </div>
 
-          {/* Documents */}
-          <div className="flex-1 overflow-y-auto p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                Documents
-              </span>
-              <span className="text-xs text-stone-400">{documents.length}</span>
-            </div>
-            <div className="space-y-1">
-              {documents.map((doc) => (
-                <a
-                  key={doc.id}
-                  href={`/chat?documentId=${doc.id}`}
-                  data-testid="document-item"
-                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all ${
-                    doc.id === currentDocumentId
-                      ? "bg-stone-200 font-medium text-stone-900 dark:bg-stone-800 dark:text-white"
-                      : "text-stone-600 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
-                  }`}
-                >
-                  <FileText className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{doc.filename}</span>
-                </a>
-              ))}
-            </div>
-          </div>
-
-          {/* Pinned notes indicator */}
-          {pinnedNotes.length > 0 && (
-            <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
-              <div className="mb-1 flex items-center gap-1">
-                <Pin className="h-3 w-3 fill-amber-400 text-amber-400" />
-                <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
-                  Pinned ({pinnedNotes.length}/3)
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Notes section */}
-          {notes.length > 0 && (
-            <div className="border-t border-stone-200 p-3 dark:border-stone-800">
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-y-auto">
+            {/* Documents */}
+            <div className="p-3">
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-xs font-medium uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                  Saved Notes ({notes.length})
+                  Documents
                 </span>
+                <span className="text-xs text-stone-400">{documents.length}</span>
               </div>
               <div className="space-y-1">
-                {sortedNotes.map((note) => {
-                  const message = messages.find(
-                    (m) => m.id === note.messageId,
-                  );
-                  if (!message) return null;
-                  return (
-                    <div
-                      key={note.id}
-                      className="group flex items-center gap-1 rounded-lg bg-stone-100 px-2 py-1.5 transition-all hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700"
-                    >
-                      {/* Navigate on click */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          scrollToMessage(note.messageId);
-                          handleFlash(note.messageId);
-                        }}
-                        className="flex flex-1 items-center gap-2 text-left text-xs"
-                      >
-                        <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-stone-400" />
-                        <span className="min-w-0 flex-1 truncate text-stone-600 dark:text-stone-300">
-                          {(message.content ?? "").slice(0, 40)}
-                          {(message.content ?? "").length > 40 ? "..." : ""}
-                        </span>
-                      </button>
-
-                      {/* Pin button */}
-                      <button
-                        type="button"
-                        onClick={() => handleTogglePin(note.id)}
-                        disabled={!note.isPinned && pinnedCount >= 3}
-                        title={
-                          note.isPinned
-                            ? "Unpin note"
-                            : `Pin note (${pinnedCount}/3)`
-                        }
-                        className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 dark:hover:bg-stone-600 dark:hover:text-stone-300"
-                      >
-                        <Pin
-                          className={`h-3 w-3 ${
-                            note.isPinned
-                              ? "fill-amber-400 text-amber-400"
-                              : ""
-                          }`}
-                        />
-                      </button>
-
-                      {/* Remove button */}
-                      <button
-                        type="button"
-                        onClick={() => handleToggleNote(note.messageId)}
-                        title="Remove note"
-                        className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-600 dark:hover:text-stone-300"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  );
-                })}
+                {documents.map((doc) => (
+                  <a
+                    key={doc.id}
+                    href={`/chat?documentId=${doc.id}`}
+                    data-testid="document-item"
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all ${
+                      doc.id === currentDocumentId
+                        ? "bg-stone-200 font-medium text-stone-900 dark:bg-stone-800 dark:text-white"
+                        : "text-stone-600 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
+                    }`}
+                  >
+                    <FileText className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{doc.filename}</span>
+                  </a>
+                ))}
               </div>
             </div>
-          )}
+
+            {/* Pinned notes — BELOW documents, above sessions */}
+            {pinnedNotes.length > 0 && (
+              <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
+                <div className="mb-1 flex items-center gap-1">
+                  <Pin className="h-3 w-3 fill-amber-400 text-amber-400" />
+                  <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                    Pinned ({pinnedNotes.length}/3)
+                  </span>
+                </div>
+                <div className="space-y-1 pb-2">
+                  {pinnedNotes.map((note) => {
+                    const message = messages.find((m) => m.id === note.messageId);
+                    if (!message) return null;
+                    return (
+                      <div
+                        key={note.id}
+                        className="group flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-1.5 transition-all hover:bg-amber-100 dark:bg-amber-900/20 dark:hover:bg-amber-900/30"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            scrollToMessage(note.messageId);
+                            handleFlash(note.messageId);
+                          }}
+                          className="flex flex-1 items-center gap-2 text-left text-xs"
+                        >
+                          <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                          <span className="min-w-0 flex-1 truncate text-amber-700 dark:text-amber-300">
+                            {(message.content ?? "").slice(0, 40)}
+                            {(message.content ?? "").length > 40 ? "..." : ""}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePin(note.id)}
+                          title="Unpin note"
+                          className="shrink-0 rounded p-0.5 text-amber-400 opacity-0 transition-all hover:bg-amber-200 group-hover:opacity-100 dark:hover:bg-amber-800"
+                        >
+                          <Pin className="h-3 w-3 fill-amber-400 text-amber-400" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleNote(note.messageId)}
+                          title="Remove note"
+                          className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-700 dark:hover:text-stone-300"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Sessions — pinned first */}
+            {sortedSessions.length > 0 && (
+              <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                    Recent Chats
+                  </span>
+                  <button
+                    type="button"
+                    onClick={refreshSessions}
+                    className="rounded p-0.5 text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-800"
+                    title="Refresh"
+                  >
+                    <Loader2 className="h-3 w-3" />
+                  </button>
+                </div>
+                <div className="space-y-0.5 pb-2">
+                  {sortedSessions.map((session) => {
+                    const isActive = currentSessionId === session.id;
+                    const sessionUrl = `/chat?documentId=${session.document_id}&sessionId=${session.id}`;
+                    return (
+                      <div
+                        key={session.id}
+                        className="group relative flex items-center gap-1 rounded-md px-2 py-1.5 transition-colors hover:bg-stone-200/50 dark:hover:bg-stone-800/40"
+                      >
+                        <a
+                          href={sessionUrl}
+                          className={`absolute inset-0 rounded-md ${
+                            isActive ? "bg-stone-200/70 dark:bg-stone-800" : ""
+                          }`}
+                        />
+                        <Pin
+                          className={`h-3 w-3 shrink-0 ${
+                            session.is_pinned
+                              ? "fill-amber-400 text-amber-400"
+                              : "text-transparent"
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-xs text-stone-600 dark:text-stone-400">
+                          {session.title}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!confirm(`Pin "${session.title}"?`)) return;
+                            try {
+                              await fetch(`/api/sessions/${session.id}`, {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ isPinned: !session.is_pinned }),
+                              });
+                              refreshSessions();
+                            } catch {
+                              toast.error("Failed to update pin");
+                            }
+                          }}
+                          title={session.is_pinned ? "Unpin chat" : "Pin chat"}
+                          className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-700 dark:hover:text-stone-300"
+                        >
+                          <Pin className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Notes section — unpinned only (pinned shown above) */}
+            {unpinnedNotes.length > 0 && (
+              <div className="border-t border-stone-200 p-3 dark:border-stone-800">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-medium uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                    Saved Notes ({notes.length})
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {unpinnedNotes.map((note) => {
+                    const message = messages.find(
+                      (m) => m.id === note.messageId,
+                    );
+                    if (!message) return null;
+                    return (
+                      <div
+                        key={note.id}
+                        className="group flex items-center gap-1 rounded-lg bg-stone-100 px-2 py-1.5 transition-all hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            scrollToMessage(note.messageId);
+                            handleFlash(note.messageId);
+                          }}
+                          className="flex flex-1 items-center gap-2 text-left text-xs"
+                        >
+                          <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+                          <span className="min-w-0 flex-1 truncate text-stone-600 dark:text-stone-300">
+                            {(message.content ?? "").slice(0, 40)}
+                            {(message.content ?? "").length > 40 ? "..." : ""}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePin(note.id)}
+                          disabled={!note.isPinned && pinnedCount >= 3}
+                          title={
+                            note.isPinned
+                              ? "Unpin note"
+                              : `Pin note (${pinnedCount}/3)`
+                          }
+                          className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 dark:hover:bg-stone-600 dark:hover:text-stone-300"
+                        >
+                          <Pin className="h-3 w-3" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleNote(note.messageId)}
+                          title="Remove note"
+                          className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-600 dark:hover:text-stone-300"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
