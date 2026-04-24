@@ -16,7 +16,7 @@ export default function MainLayout({
           <h1 className="text-xl font-semibold text-gray-800 dark:text-[#f5f7fb]">
             Personal AI Assistant
           </h1>
-          <UserButton afterSignOutUrl="/" />
+          <UserButton />
         </header>
 
         <main className="flex-1 overflow-auto px-6 py-7">{children}</main>

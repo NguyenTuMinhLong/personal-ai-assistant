@@ -42,3 +42,20 @@ export type Citation = {
   chunkIndex: number;
   contentPreview: string;
 };
+
+export type MessageAnnotation = {
+  id: string;
+  userId: string;
+  sessionId: string;
+  documentId: string;
+  messageId: string;
+  noteContent: string;
+  highlightColor: HighlightColor | null;
+  selectionStart: number;
+  selectionEnd: number;
+  isPinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HighlightColor = "rose" | "amber" | "emerald" | "sky" | "violet";

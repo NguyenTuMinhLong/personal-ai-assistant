@@ -12,7 +12,7 @@ import {
   ChevronRight,
   Trash2,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, parseISO } from "date-fns";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useChatSessions } from "@/hooks/useChatSessions";
@@ -155,9 +155,16 @@ export function Sidebar() {
                           {session.document_name}
                         </span>
                       )}
-                      <span className="truncate text-xs text-stone-600 dark:text-stone-400">
-                        {session.title}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-xs text-stone-600 dark:text-stone-400">
+                          {session.title}
+                        </span>
+                        {session.updated_at && (
+                          <span className="shrink-0 text-[10px] text-stone-400 dark:text-stone-600">
+                            {formatDistanceToNow(parseISO(session.updated_at), { addSuffix: true })}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })

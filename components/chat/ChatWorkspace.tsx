@@ -46,6 +46,7 @@ type ChatMessage = {
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
+  createdAt?: string;
 };
 
 type SavedNote = {
@@ -83,6 +84,26 @@ const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
 // ─── Utility ────────────────────────────────────────────────────
 function createMessageId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function formatRelativeTime(dateStr: string): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 // ─── Highlight color swatch button ──────────────────────────────
@@ -291,6 +312,7 @@ interface MessageBubbleProps {
   flashedMessageId: string | null;
   copiedMessageId: string | null;
   highlightPickerOpen: boolean;
+  pendingSelection: { messageId: string; text: string; selectionStart: number; selectionEnd: number } | null;
   onHighlightPickerToggle: (messageId: string | null) => void;
   onHighlight: (messageId: string, color: HighlightColor) => void;
   onCopy: (content: string, messageId: string) => void;
@@ -402,6 +424,11 @@ const MessageBubble = memo(function MessageBubble({
                 style={{ backgroundColor: `var(--highlight-${message.highlightColor})` }}
                 title="Has highlight"
               />
+            )}
+            {message.createdAt && (
+              <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                {formatRelativeTime(message.createdAt)}
+              </span>
             )}
           </div>
 
@@ -931,6 +958,7 @@ export function ChatWorkspace({
               chunk_index: number;
               content_preview: string;
             }>;
+            created_at?: string;
           }>;
           annotations: PersistedAnnotation[];
         }) => {
@@ -952,6 +980,7 @@ export function ChatWorkspace({
               highlightColor: (ann?.highlight_color as HighlightColor) ?? null,
               selectionStart: ann?.selection_start ?? null,
               selectionEnd: ann?.selection_end ?? null,
+              createdAt: msg.created_at ?? null,
             };
           });
 
@@ -1032,6 +1061,7 @@ export function ChatWorkspace({
         role: "user",
         content: trimmed,
         imageUrl: imageUrl ?? null,
+        createdAt: new Date().toISOString(),
       };
 
       setMessages((prev) => [...prev, userMessage]);
@@ -1087,6 +1117,7 @@ export function ChatWorkspace({
             highlightColor: null,
             selectionStart: null,
             selectionEnd: null,
+            createdAt: new Date().toISOString(),
           },
         ]);
 

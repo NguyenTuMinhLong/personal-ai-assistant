@@ -1,5 +1,5 @@
 import { currentUser } from "@clerk/nextjs/server";
-import { embed, generateText } from "ai";
+import { embed, generateText, type ModelMessage, type UserModelMessage } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
@@ -282,9 +282,9 @@ export async function POST(req: NextRequest) {
   }
 
     // Build prompt content and handle image if present
-    let promptContent: { role: "user"; content: string | Array<{ type: string; text?: string; image?: string | { toString(): string } }> };
+    let promptContent: UserModelMessage;
 
-    if (shouldProcessImage) {
+    if (shouldProcessImage && imageUrl) {
       // Convert image to base64 for AI vision
       try {
         const imageRes = await fetch(imageUrl);
@@ -300,7 +300,7 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Document name: ${document.filename}
 
 Question:
@@ -309,7 +309,7 @@ ${message}
 Context:
 ${context}`,
             },
-            { type: "image", image: dataUrl },
+            { type: "image" as const, image: dataUrl },
           ],
         };
       } catch (fetchError) {

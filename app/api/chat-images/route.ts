@@ -129,9 +129,10 @@ export async function POST(req: NextRequest) {
         });
 
       if (error) {
-        uploadError = { code: error.code || "UNKNOWN", message: error.message };
+        const errorCode = error.statusCode || String(error.status) || "UNKNOWN";
+        uploadError = { code: errorCode, message: error.message };
         // Only retry on network-like errors
-        if (attempt < 2 && (error.code === "STORAGE_NETWORK_ERROR" || !error.status)) {
+        if (attempt < 2 && (error.statusCode === "STORAGE_NETWORK_ERROR" || !error.status)) {
           await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
           continue;
         }

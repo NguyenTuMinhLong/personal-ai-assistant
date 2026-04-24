@@ -5,6 +5,7 @@ import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { listUserDocuments } from "@/lib/documents";
 import { getChatSession, listMessages } from "@/lib/sessions";
 import { listSessionAnnotations } from "@/lib/annotations";
+import type { ChatSession, Message, MessageAnnotation, HighlightColor } from "@/types";
 
 type ChatPageProps = {
   searchParams: Promise<{
@@ -41,7 +42,11 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
       : Promise.resolve([null, [], []]),
   ]);
 
-  const [session, initialMessages, initialAnnotations] = sessionData;
+  const [session, initialMessages, initialAnnotations]: [
+    ChatSession | null,
+    Message[],
+    MessageAnnotation[]
+  ] = sessionData as [ChatSession | null, Message[], MessageAnnotation[]];
 
   // Determine which document to show
   let initialDocumentId: string | null = null;
@@ -76,9 +81,10 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
         index: i + 1,
         snippet: c.contentPreview ?? "",
       })),
-      highlightColor: ann?.highlightColor ?? null,
+      highlightColor: (ann?.highlightColor ?? null) as HighlightColor | null,
       selectionStart: ann?.selectionStart ?? null,
       selectionEnd: ann?.selectionEnd ?? null,
+      createdAt: msg.created_at ?? null,
     };
   });
 
