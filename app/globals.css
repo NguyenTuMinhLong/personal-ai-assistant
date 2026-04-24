@@ -32,6 +32,13 @@
   --accent-copper: #92400E;
   --accent-cream: #FEF3C7;
   
+  /* Highlight colors - light mode: soft pastel variants */
+  --highlight-rose: #fda4af;
+  --highlight-amber: #fde68a;
+  --highlight-emerald: #6ee7b7;
+  --highlight-sky: #bae6fd;
+  --highlight-violet: #f3e8ff;
+  
   /* Semantic colors */
   --success: #059669;
   --warning: #D97706;
@@ -66,29 +73,36 @@ html.dark {
   --background-subtle: #292524;
   --foreground: #FAFAF9;
   --foreground-muted: #A8A29E;
-  
+
   /* Surfaces */
   --surface: #292524;
   --surface-muted: #1C1917;
   --surface-elevated: #3D3835;
-  
+
   /* Borders */
   --border: #44403C;
   --border-muted: #292524;
-  
+
   /* Brand colors - Warm orange for dark mode */
   --primary: #FB923C;
   --primary-hover: #FDBA74;
   --primary-light: #431407;
   --primary-foreground: #FFFFFF;
-  
+
+  /* Highlight colors - dark mode: deep, saturated variants */
+  --highlight-rose: #9f1239;
+  --highlight-amber: #78350f;
+  --highlight-emerald: #064e3b;
+  --highlight-sky: #0c4a6e;
+  --highlight-violet: #4c1d95;
+
   /* Shadows - Dark mode */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
   --shadow-glow: 0 0 30px rgba(251, 146, 60, 0.15);
-  
+
   color-scheme: dark;
 }
 

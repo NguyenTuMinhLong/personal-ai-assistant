@@ -15,6 +15,7 @@ type RequestBody = {
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
+  isPinned?: boolean;
 };
 
 const VALID_HIGHLIGHT_COLORS = new Set<HighlightColor>([
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
   const messageId = body.messageId?.trim();
   const noteContent = body.noteContent?.trim() || null;
   const highlightColor = body.highlightColor ?? null;
+  const isPinned = body.isPinned ?? false;
 
   const selectionStart =
     typeof body.selectionStart === "number" &&
@@ -123,13 +125,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    if (!noteContent && !highlightColor) {
+    // Delete if: no content, no color, and not pinning (unpinning)
+    if (!noteContent && !highlightColor && !isPinned) {
       await deleteMessageAnnotation(user.id, messageId);
-
-      return NextResponse.json({
-        success: true,
-        deleted: true,
-      });
+      return NextResponse.json({ success: true, deleted: true });
     }
 
     const annotation = await upsertMessageAnnotation({
@@ -150,7 +149,6 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Could not save annotation.";
-
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -19,6 +19,7 @@ export type MessageAnnotation = {
   highlightColor: HighlightColor | null;
   selectionStart: number | null;
   selectionEnd: number | null;
+  isPinned?: boolean;
   createdAt: string;
   updatedAt: string;
 };

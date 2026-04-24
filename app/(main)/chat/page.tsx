@@ -62,23 +62,30 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   }
 
   // Transform server messages + annotations into the shape ChatWorkspace expects
-  const transformedMessages = initialMessages.map((msg, index) => ({
-    id: msg.id,
-    role: msg.role,
-    content: msg.content,
-    imageUrl: msg.imageUrl ?? null,
-    citations: (msg.citations ?? []).map((c, i) => ({
-      index: i + 1,
-      snippet: c.contentPreview ?? "",
-    })),
-    highlightColor: null,
-    selectionStart: null,
-    selectionEnd: null,
-  }));
+  const highlightMap = new Map(
+    initialAnnotations.map((ann) => [ann.messageId, ann])
+  );
+  const transformedMessages = initialMessages.map((msg, index) => {
+    const ann = highlightMap.get(msg.id);
+    return {
+      id: msg.id,
+      role: msg.role,
+      content: msg.content,
+      imageUrl: msg.imageUrl ?? null,
+      citations: (msg.citations ?? []).map((c, i) => ({
+        index: i + 1,
+        snippet: c.contentPreview ?? "",
+      })),
+      highlightColor: ann?.highlightColor ?? null,
+      selectionStart: ann?.selectionStart ?? null,
+      selectionEnd: ann?.selectionEnd ?? null,
+    };
+  });
 
   const transformedAnnotations = initialAnnotations.map((ann) => ({
     id: ann.id,
     messageId: ann.messageId,
+    isPinned: (ann as { isPinned?: boolean }).isPinned ?? false,
   }));
 
   return (

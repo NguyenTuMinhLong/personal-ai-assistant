@@ -17,6 +17,7 @@ import {
   ImagePlus,
   Loader2,
   MessageSquare,
+  Pin,
   Plus,
   SendHorizonal,
   Sparkles,
@@ -49,6 +50,7 @@ type ChatMessage = {
 type SavedNote = {
   id: string;
   messageId: string;
+  isPinned?: boolean;
 };
 
 type PersistedAnnotation = {
@@ -57,6 +59,7 @@ type PersistedAnnotation = {
   highlight_color: string | null;
   selection_start: number | null;
   selection_end: number | null;
+  is_pinned?: boolean;
 };
 
 type ChatWorkspaceProps = {
@@ -67,6 +70,7 @@ type ChatWorkspaceProps = {
   initialNotes?: SavedNote[];
 };
 
+// ─── Highlight color config ─────────────────────────────────────
 const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
   { color: "rose", label: "Rose" },
   { color: "amber", label: "Amber" },
@@ -75,89 +79,164 @@ const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
   { color: "violet", label: "Violet" },
 ];
 
+// ─── Utility ────────────────────────────────────────────────────
 function createMessageId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-// Extract message action buttons to prevent re-renders
+// ─── Highlight color swatch button ──────────────────────────────
+function HighlightSwatch({
+  color,
+  label,
+  isActive,
+  onClick,
+}: {
+  color: HighlightColor;
+  label: string;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const lightColors: Record<HighlightColor, string> = {
+    rose: "#fda4af",
+    amber: "#fde68a",
+    emerald: "#6ee7b7",
+    sky: "#bae6fd",
+    violet: "#f3e8ff",
+  };
+  const darkColors: Record<HighlightColor, string> = {
+    rose: "#9f1239",
+    amber: "#78350f",
+    emerald: "#064e3b",
+    sky: "#0c4a6e",
+    violet: "#4c1d95",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-5 w-5 rounded-full border transition-all ${
+        isActive
+          ? "scale-110 border-stone-900 dark:border-white shadow-sm"
+          : "border-white/70 dark:border-stone-600 hover:scale-105"
+      }`}
+      style={{
+        background: `linear-gradient(135deg, ${lightColors[color]} 0%, ${darkColors[color]} 100%)`,
+      }}
+      title={label}
+    />
+  );
+}
+
+// ─── Inline highlighted text renderer ───────────────────────────
+function HighlightedText({
+  content,
+  highlightColor,
+  selectionStart,
+  selectionEnd,
+}: {
+  content: string;
+  highlightColor?: HighlightColor | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+}) {
+  const hasInline =
+    highlightColor && selectionStart != null && selectionEnd != null;
+
+  if (!hasInline) {
+    return <span>{content}</span>;
+  }
+
+  const before = content.slice(0, selectionStart);
+  const highlighted = content.slice(selectionStart, selectionEnd);
+  const after = content.slice(selectionEnd);
+
+  return (
+    <span>
+      {before}
+      <span
+        style={{
+          backgroundColor: `var(--highlight-${highlightColor})`,
+          borderRadius: "2px",
+          padding: "0 1px",
+        }}
+      >
+        {highlighted}
+      </span>
+      {after}
+    </span>
+  );
+}
+
+// ─── Message actions (AI messages only) ─────────────────────────
 interface MessageActionsProps {
   message: ChatMessage;
-  highlightMode: boolean;
-  onHighlightModeChange: (value: boolean) => void;
-  onHighlight: (messageId: string, color: HighlightColor) => Promise<void>;
+  highlightPickerOpen: boolean;
+  onHighlightPickerToggle: (messageId: string | null) => void;
+  onHighlight: (messageId: string, color: HighlightColor) => void;
   onCopy: (content: string, messageId: string) => void;
   onToggleNote: (messageId: string) => Promise<void>;
+  onDeleteMessage: (messageId: string) => void;
   copiedMessageId: string | null;
   isSaved: boolean;
-  hasSelectedExcerpt: boolean;
 }
 
 const MessageActions = memo(function MessageActions({
   message,
-  highlightMode,
-  onHighlightModeChange,
+  highlightPickerOpen,
+  onHighlightPickerToggle,
   onHighlight,
   onCopy,
   onToggleNote,
+  onDeleteMessage,
   copiedMessageId,
   isSaved,
-  hasSelectedExcerpt,
 }: MessageActionsProps) {
   const isCopied = copiedMessageId === message.id;
 
   return (
-    <>
-      {/* Highlight mode toggle */}
+    <div className="mt-2 ml-1 flex flex-wrap items-center gap-1.5">
+      {/* Highlight toggle — per-message */}
       <button
-        onClick={() => onHighlightModeChange(!highlightMode)}
+        onClick={() =>
+          onHighlightPickerToggle(
+            highlightPickerOpen ? null : message.id,
+          )
+        }
         className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
-          highlightMode
+          highlightPickerOpen
             ? "border-stone-400 bg-stone-100 text-stone-700 dark:border-stone-500 dark:bg-stone-700 dark:text-stone-200"
             : "border-stone-200 bg-white text-stone-500 hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
         }`}
-        title="Highlight mode"
+        title="Highlight selected text"
       >
         <div className="flex h-2.5 w-2.5 items-center justify-center">
-          <div className={`h-1.5 w-1.5 rounded-full ${highlightMode ? "bg-stone-600 dark:bg-stone-300 animate-pulse" : "bg-stone-400"}`} />
+          <div
+            className={`h-1.5 w-1.5 rounded-full ${
+              highlightPickerOpen
+                ? "bg-stone-600 dark:bg-stone-300 animate-pulse"
+                : "bg-stone-400"
+            }`}
+          />
         </div>
-        {highlightMode ? "Selecting..." : "Highlight"}
+        {highlightPickerOpen ? "Done" : "Highlight"}
       </button>
 
-      {/* Highlight colors */}
-      {highlightMode && (
+      {/* Color picker — only when picker is open for this message */}
+      {highlightPickerOpen && (
         <div className="flex items-center gap-0.5 rounded-md border border-stone-200 bg-white p-1 dark:border-stone-700 dark:bg-stone-800">
-          {HIGHLIGHT_COLORS.map((h) => {
-            const isActive = message.highlightColor === h.color;
-            return (
-              <button
-                key={h.color}
-                type="button"
-                onClick={() => onHighlight(message.id, h.color)}
-                className={`h-5 w-5 rounded-full border transition-all ${
-                  isActive
-                    ? "scale-110 border-stone-900 dark:border-white shadow-sm"
-                    : "border-white/70 hover:scale-105"
-                }`}
-                style={{
-                  backgroundColor:
-                    h.color === "rose"
-                      ? "#fda4af"
-                      : h.color === "amber"
-                        ? "#d6d3d1"
-                        : h.color === "emerald"
-                          ? "#6ee7b7"
-                          : h.color === "sky"
-                            ? "#7dd3fc"
-                            : "#e9d5ff",
-                }}
-                title={h.label}
-              />
-            );
-          })}
+          {HIGHLIGHT_COLORS.map((h) => (
+            <HighlightSwatch
+              key={h.color}
+              color={h.color}
+              label={h.label}
+              isActive={message.highlightColor === h.color}
+              onClick={() => onHighlight(message.id, h.color)}
+            />
+          ))}
         </div>
       )}
 
-      {/* Copy button */}
+      {/* Copy */}
       <button
         onClick={() => onCopy(message.content ?? "", message.id)}
         className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
@@ -187,63 +266,91 @@ const MessageActions = memo(function MessageActions({
         }`}
       >
         <BookmarkPlus className="h-3 w-3" />
-        {isSaved ? "Saved" : hasSelectedExcerpt ? "Save selection" : "Save note"}
+        {isSaved ? "Saved" : "Save note"}
       </button>
 
-      {hasSelectedExcerpt && (
-        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[10px] font-medium text-stone-500 dark:bg-stone-800 dark:text-stone-400">
-          Selection ready
-        </span>
-      )}
-    </>
+      {/* Delete */}
+      <button
+        type="button"
+        onClick={() => onDeleteMessage(message.id)}
+        className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
+        title="Delete message"
+      >
+        <Trash2 className="h-3 w-3" />
+        Delete
+      </button>
+    </div>
   );
 });
 
-// Single message component - memoized to prevent re-renders
+// ─── Message bubble ──────────────────────────────────────────────
 interface MessageBubbleProps {
   message: ChatMessage;
+  isSaved: boolean;
   flashedMessageId: string | null;
   copiedMessageId: string | null;
-  highlightMode: boolean;
-  selectedExcerpt: { messageId: string; text: string } | null;
-  onHighlightModeChange: (value: boolean) => void;
-  onHighlight: (messageId: string, color: HighlightColor) => Promise<void>;
+  highlightPickerOpen: boolean;
+  onHighlightPickerToggle: (messageId: string | null) => void;
+  onHighlight: (messageId: string, color: HighlightColor) => void;
   onCopy: (content: string, messageId: string) => void;
   onToggleNote: (messageId: string) => Promise<void>;
-  onSelectExcerpt: (messageId: string, text: string) => void;
   onDeleteMessage: (messageId: string) => void;
   onFlash: (messageId: string) => void;
+  onRef?: (el: HTMLDivElement | null) => void;
 }
 
 const MessageBubble = memo(function MessageBubble({
   message,
+  isSaved,
   flashedMessageId,
   copiedMessageId,
-  highlightMode,
-  selectedExcerpt,
-  onHighlightModeChange,
+  highlightPickerOpen,
+  onHighlightPickerToggle,
   onHighlight,
   onCopy,
   onToggleNote,
-  onSelectExcerpt,
   onDeleteMessage,
   onFlash,
+  onRef,
 }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isFlashed = flashedMessageId === message.id;
-  const hasSelectedExcerpt =
-    selectedExcerpt?.messageId === message.id &&
-    selectedExcerpt.text.length > 0;
+  const isCopied = copiedMessageId === message.id;
 
+  // Capture text selection when highlight picker is open for this message
   const handleTextSelection = useCallback(() => {
+    if (!highlightPickerOpen || isUser) return;
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || isUser) return;
-    
-    const selectedText = selection.toString().trim();
-    if (selectedText.length > 0) {
-      onSelectExcerpt(message.id, selectedText);
-    }
-  }, [message.id, isUser, onSelectExcerpt]);
+    if (!selection || selection.isCollapsed) return;
+    const selectedText = selection.toString();
+    if (selectedText.length === 0) return;
+
+    const range = selection.getRangeAt(0);
+    const contentEl = document.getElementById(`msg-content-${message.id}`);
+    if (!contentEl) return;
+
+    // Clone everything before the selection start, then count plain text characters
+    const preRange = document.createRange();
+    preRange.setStart(contentEl, 0);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    const preFragment = preRange.cloneContents();
+    const preDiv = document.createElement("div");
+    preDiv.appendChild(preFragment);
+    const charsBefore = preDiv.textContent?.length ?? 0;
+
+    setPendingSelection({
+      messageId: message.id,
+      text: selectedText,
+      selectionStart: charsBefore,
+      selectionEnd: charsBefore + selectedText.length,
+    });
+    pendingSelectionRef.current = {
+      messageId: message.id,
+      text: selectedText,
+      selectionStart: charsBefore,
+      selectionEnd: charsBefore + selectedText.length,
+    };
+  }, [highlightPickerOpen, isUser, message.id]);
 
   return (
     <div
@@ -252,12 +359,14 @@ const MessageBubble = memo(function MessageBubble({
         if (element && isFlashed) {
           onFlash(message.id);
         }
+        if (onRef) {
+          onRef(element);
+        }
       }}
       className={`group transition-all duration-300 ${
         isFlashed ? "scale-[1.01]" : ""
       }`}
     >
-      {/* Message bubble - user on right, assistant on left */}
       <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
         {/* Avatar */}
         <div
@@ -286,25 +395,23 @@ const MessageBubble = memo(function MessageBubble({
                 Image attached
               </span>
             )}
-            {isUser && (
-              <button
-                type="button"
-                onClick={() => onDeleteMessage(message.id)}
-                className="ml-auto rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-100 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-700"
-                title="Delete message"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
+            {message.highlightColor && (
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ backgroundColor: `var(--highlight-${message.highlightColor})` }}
+                title="Has highlight"
+              />
             )}
           </div>
 
           {/* Message content */}
           <div
+            id={`msg-content-${message.id}`}
             className={`relative rounded-2xl px-4 py-3 ${
               isUser
                 ? "bg-stone-800 text-stone-100 dark:bg-stone-700"
                 : "border border-stone-200 bg-white dark:border-stone-700 dark:bg-stone-800"
-            } ${highlightMode && !isUser ? "cursor-text" : ""}`}
+            } ${highlightPickerOpen && !isUser ? "ring-2 ring-stone-400 dark:ring-stone-500" : ""}`}
             onMouseUp={handleTextSelection}
           >
             {message.imageUrl && (
@@ -315,7 +422,12 @@ const MessageBubble = memo(function MessageBubble({
               />
             )}
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
-              {message.content ?? ""}
+              <HighlightedText
+                content={message.content ?? ""}
+                highlightColor={message.highlightColor}
+                selectionStart={message.selectionStart}
+                selectionEnd={message.selectionEnd}
+              />
             </p>
           </div>
 
@@ -341,19 +453,46 @@ const MessageBubble = memo(function MessageBubble({
           )}
 
           {/* Action buttons */}
-          {!isUser && (
-            <div className="mt-2 ml-1 flex items-center gap-1.5">
-              <MessageActions
-                message={message}
-                highlightMode={highlightMode}
-                onHighlightModeChange={onHighlightModeChange}
-                onHighlight={onHighlight}
-                onCopy={onCopy}
-                onToggleNote={onToggleNote}
-                copiedMessageId={copiedMessageId}
-                isSaved={false}
-                hasSelectedExcerpt={hasSelectedExcerpt}
-              />
+          {!isUser ? (
+            <MessageActions
+              message={message}
+              highlightPickerOpen={highlightPickerOpen}
+              onHighlightPickerToggle={onHighlightPickerToggle}
+              onHighlight={onHighlight}
+              onCopy={onCopy}
+              onToggleNote={onToggleNote}
+              onDeleteMessage={onDeleteMessage}
+              copiedMessageId={copiedMessageId}
+              isSaved={isSaved}
+            />
+          ) : (
+            /* User message actions: Copy + Delete */
+            <div className="mt-2 ml-1 flex items-center justify-end gap-1.5">
+              <button
+                onClick={() => onCopy(message.content ?? "", message.id)}
+                className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
+              >
+                {isCopied ? (
+                  <>
+                    <Check className="h-3 w-3 text-emerald-600" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3" />
+                    Copy
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeleteMessage(message.id)}
+                className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
+                title="Delete message"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </button>
             </div>
           )}
         </div>
@@ -362,7 +501,7 @@ const MessageBubble = memo(function MessageBubble({
   );
 });
 
-// Typing indicator component
+// ─── Typing indicator ───────────────────────────────────────────
 const TypingIndicator = memo(function TypingIndicator() {
   return (
     <div className="flex items-start gap-3">
@@ -380,6 +519,7 @@ const TypingIndicator = memo(function TypingIndicator() {
   );
 });
 
+// ─── Main component ─────────────────────────────────────────────
 export function ChatWorkspace({
   documents,
   initialDocumentId,
@@ -387,12 +527,17 @@ export function ChatWorkspace({
   initialMessages,
   initialNotes,
 }: ChatWorkspaceProps) {
-  // Track current session ID - starts from props but can be updated
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(initialSessionId);
-  
-  // Only keep messages and notes in local state - use props as source of truth
-  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages ?? []);
-  const [notes, setNotes] = useState<SavedNote[]>(() => initialNotes ?? []);
+  // ── State ────────────────────────────────────────────────────
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(
+    initialSessionId,
+  );
+
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    () => initialMessages ?? [],
+  );
+  const [notes, setNotes] = useState<SavedNote[]>(
+    () => initialNotes ?? [],
+  );
   const [input, setInput] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -400,138 +545,225 @@ export function ChatWorkspace({
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const [selectedExcerpt, setSelectedExcerpt] = useState<{ messageId: string; text: string } | null>(null);
-  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [highlightMode, setHighlightMode] = useState(false);
-  const [noteIds, setNoteIds] = useState<Set<string>>(
-    () => new Set((initialNotes ?? []).map((n) => n.messageId))
+  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(
+    null,
   );
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
+  // Per-message highlight: which message has its color picker open
+  const [highlightPickerMessageId, setHighlightPickerMessageId] =
+    useState<string | null>(null);
+
+  // Pending text selection waiting for a color to be picked
+  const pendingSelectionRef = useRef<{
+    messageId: string;
+    text: string;
+    selectionStart: number;
+    selectionEnd: number;
+  } | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<{
+    messageId: string;
+    text: string;
+    selectionStart: number;
+    selectionEnd: number;
+  } | null>(null);
+
+  // Resizable layout state
+  const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [inputAreaHeight, setInputAreaHeight] = useState<number | null>(null);
+
+  // ── Refs ─────────────────────────────────────────────────────
   const router = useRouter();
-
-  // Refs for refs and flags
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const contentRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLoadingRef = useRef(false);
   const loadedSessionRef = useRef<string | null>(
-    initialMessages && initialSessionId ? initialSessionId : null
+    initialMessages && initialSessionId ? initialSessionId : null,
   );
 
-  // Sync with URL params when they change
-  useEffect(() => {
-    // When URL session changes, reset loading state so load effect can trigger
-    if (loadedSessionRef.current !== initialSessionId) {
-      isLoadingRef.current = false;
-    }
-  }, [initialSessionId]);
-
-  // Use props directly as source of truth for document
+  // ── Derived state ────────────────────────────────────────────
   const currentDocumentId = initialDocumentId;
 
-  // Memoize notes lookup map for O(1) access
-  const noteIdsMap = useMemo(() => {
-    return new Set(notes.map((note) => note.messageId));
-  }, [notes]);
+  const noteIdsMap = useMemo(
+    () => new Set(notes.map((note) => note.messageId)),
+    [notes],
+  );
+
+  const pinnedNotes = useMemo(
+    () => notes.filter((n) => n.isPinned).slice(0, 3),
+    [notes],
+  );
+  const pinnedCount = pinnedNotes.length;
+  const pinnedIds = useMemo(
+    () => new Set(pinnedNotes.map((n) => n.id)),
+    [pinnedNotes],
+  );
+
+  const sortedNotes = useMemo(() => {
+    const unpinned = notes.filter((n) => !n.isPinned);
+    return [...pinnedNotes, ...unpinned].slice(0, 5);
+  }, [notes, pinnedNotes]);
 
   const selectedDocument = useMemo(
     () => documents.find((doc) => doc.id === currentDocumentId) ?? null,
     [documents, currentDocumentId],
   );
 
+  // ── Effects ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (loadedSessionRef.current !== initialSessionId) {
+      isLoadingRef.current = false;
+    }
+  }, [initialSessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
+    };
+  }, [imagePreview]);
+
+  // ── Scroll helpers ────────────────────────────────────────────
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
-    const nearBottom = distanceFromBottom < 120;
-
-    setShowJumpToLatest(!nearBottom);
+    setShowJumpToLatest(distanceFromBottom >= 120);
   }, []);
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = scrollContainerRef.current;
     if (!container) return;
-
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior,
-    });
+    container.scrollTo({ top: container.scrollHeight, behavior });
   }, []);
 
-  // Handle text selection for excerpts — debounced so selecting doesn't spam toasts
-  const toastShownRef = useRef<Set<string>>(new Set());
-
-  const handleSelectExcerpt = useCallback((messageId: string, text: string) => {
-    setSelectedExcerpt({ messageId, text });
-    if (!toastShownRef.current.has(messageId)) {
-      toastShownRef.current.add(messageId);
-      toast.info("Selection saved! Click 'Save selection' to save as a note.");
-    }
+  const scrollToMessage = useCallback((messageId: string) => {
+    const container = scrollContainerRef.current;
+    const element = messageRefs.current[messageId];
+    if (!container || !element) return;
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
-  // Flash animation for new messages
   const handleFlash = useCallback((messageId: string) => {
     setFlashedMessageId(messageId);
-    if (flashTimeoutRef.current) {
-      clearTimeout(flashTimeoutRef.current);
-    }
-    flashTimeoutRef.current = setTimeout(() => {
-      setFlashedMessageId(null);
-    }, 500);
+    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+    flashTimeoutRef.current = setTimeout(() => setFlashedMessageId(null), 500);
   }, []);
 
-  // Copy to clipboard
+  // ── Resize handlers ──────────────────────────────────────────
+  const startSidebarResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
+      const onMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX;
+        setSidebarWidth(Math.min(Math.max(startWidth + delta, 200), 400));
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [sidebarWidth],
+  );
+
+  const startInputResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const startY = e.clientY;
+    const startHeight = container.clientHeight;
+    const onMove = (ev: MouseEvent) => {
+      const delta = startY - ev.clientY;
+      const newH = Math.min(
+        Math.max(startHeight + delta, 200),
+        window.innerHeight * 0.7,
+      );
+      container.style.height = `${newH}px`;
+      updateScrollState();
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [updateScrollState]);
+
+  // ── Clipboard ────────────────────────────────────────────────
   const copyToClipboard = useCallback((content: string, messageId: string) => {
     navigator.clipboard.writeText(content);
     setCopiedMessageId(messageId);
     setTimeout(() => setCopiedMessageId(null), 2000);
   }, []);
 
-  // Delete message
-  const handleDeleteMessage = useCallback(async (messageId: string) => {
-    setMessages((prev) => prev.filter((m) => m.id !== messageId));
-    setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
-    toast.success("Message deleted");
-  }, []);
+  // ── Delete message ────────────────────────────────────────────
+  const handleDeleteMessage = useCallback(
+    async (messageId: string) => {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+      toast.success("Message deleted");
+    },
+    [],
+  );
 
-  // Save annotation
+  // ── Save annotation ───────────────────────────────────────────
   const handleSaveAnnotation = useCallback(
-    async (messageId: string, highlightColor: HighlightColor | null) => {
+    async (
+      messageId: string,
+      highlightColor: HighlightColor | null,
+      selectionStart?: number | null,
+      selectionEnd?: number | null,
+    ) => {
+      if (!currentSessionId) {
+        console.error("[handleSaveAnnotation] No currentSessionId, skipping");
+        return;
+      }
+
       const res = await fetch("/api/annotations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messageId,
-          sessionId: initialSessionId,
+          sessionId: currentSessionId,
           highlightColor,
-          selectionStart: selectedExcerpt?.messageId === messageId ? 0 : null,
-          selectionEnd: selectedExcerpt?.messageId === messageId ? 100 : null,
+          selectionStart: selectionStart ?? null,
+          selectionEnd: selectionEnd ?? null,
         }),
       });
       const payload = (await res.json()) as
         | { success: true }
-        | { success: false; error: string } | null;
+        | { success: false; error: string }
+        | null;
 
       if (!res.ok || !payload?.success) {
         throw new Error(payload?.error || "Could not save annotation.");
       }
-
-      // Reset excerpt selection so toast can fire again for this message
-      setSelectedExcerpt((prev) => (prev?.messageId === messageId ? null : prev));
-      toastShownRef.current.delete(messageId);
     },
-    [initialSessionId, selectedExcerpt],
+    [currentSessionId],
   );
 
-  // Toggle note — uses functional updates so deps stay stable
+  // ── Toggle note ───────────────────────────────────────────────
   const handleToggleNote = useCallback(
     async (messageId: string) => {
       const existingNote = notes.find((n) => n.messageId === messageId);
       if (existingNote) {
+        if (currentSessionId) {
+          try {
+            await fetch("/api/annotations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messageId, sessionId: currentSessionId }),
+            });
+          } catch {
+            // best-effort
+          }
+        }
         setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
         toast.success("Note removed");
       } else {
@@ -539,38 +771,102 @@ export function ChatWorkspace({
         const newNote: SavedNote = { id: createMessageId(), messageId };
         setNotes((prev) => [...prev, newNote]);
         handleFlash(messageId);
+        requestAnimationFrame(() => scrollToLatest());
         toast.success("Note saved!");
       }
     },
-    [handleSaveAnnotation, handleFlash, notes],
+    [notes, currentSessionId, handleSaveAnnotation, handleFlash, scrollToLatest],
   );
 
-  // Handle highlight message
-  const handleHighlightMessage = useCallback(
-    async (messageId: string, highlightColor: HighlightColor) => {
-      await handleSaveAnnotation(messageId, highlightColor);
+  // ── Toggle pin ───────────────────────────────────────────────
+  const handleTogglePin = useCallback(
+    async (noteId: string) => {
+      const note = notes.find((n) => n.id === noteId);
+      if (!note || !currentSessionId) return;
+
+      const pinnedNow = !note.isPinned;
+      if (pinnedNow && pinnedCount >= 3) {
+        toast.error("Maximum 3 pinned notes allowed");
+        return;
+      }
+
+      // Optimistic update
+      setNotes((prev) =>
+        prev.map((n) => (n.id === noteId ? { ...n, isPinned: pinnedNow } : n)),
+      );
+
+      try {
+        await fetch("/api/annotations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messageId: note.messageId,
+            sessionId: currentSessionId,
+            noteContent: null,
+            highlightColor: null,
+            isPinned: pinnedNow,
+          }),
+        });
+      } catch {
+        // Revert on failure
+        setNotes((prev) =>
+          prev.map((n) =>
+            n.id === noteId ? { ...n, isPinned: !pinnedNow } : n,
+          ),
+        );
+        toast.error("Failed to update pin");
+      }
+    },
+    [notes, currentSessionId, pinnedCount],
+  );
+
+  // ── Apply highlight with text selection ───────────────────────
+  const handleHighlight = useCallback(
+    async (messageId: string, color: HighlightColor) => {
+      const sel = pendingSelectionRef.current?.messageId === messageId
+        ? pendingSelectionRef.current
+        : null;
+
+      const selStart = sel?.selectionStart ?? null;
+      const selEnd = sel?.selectionEnd ?? null;
+
+      await handleSaveAnnotation(messageId, color, selStart, selEnd);
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === messageId ? { ...m, highlightColor } : m,
+          m.id === messageId
+            ? { ...m, highlightColor: color, selectionStart: selStart, selectionEnd: selEnd }
+            : m,
         ),
       );
-      setHighlightMode(false);
+      setHighlightPickerMessageId(null);
+      setPendingSelection(null);
+      pendingSelectionRef.current = null;
       toast.success("Highlight saved!");
     },
     [handleSaveAnnotation],
   );
 
-  // Build notes from annotations
-  const buildNotesFromAnnotations = useCallback((annotations: PersistedAnnotation[]): SavedNote[] => {
-    return annotations.map((a) => ({
-      id: a.id,
-      messageId: a.message_id,
-    }));
-  }, []);
+  // ── Build notes from annotations ──────────────────────────────
+  const buildNotesFromAnnotations = useCallback(
+    (annotations: PersistedAnnotation[]): SavedNote[] =>
+      annotations.map((a) => ({
+        id: a.id,
+        messageId: a.message_id,
+        isPinned: a.is_pinned ?? false,
+      })),
+    [],
+  );
 
-  // Load session messages when session changes
+  // ── Load session messages ─────────────────────────────────────
   useEffect(() => {
-    // No session = no messages to load
+    if (initialMessages && initialMessages.length > 0) {
+      // SSR already loaded — track it so we don't re-fetch
+      if (currentSessionId) {
+        loadedSessionRef.current = currentSessionId;
+      }
+      return;
+    }
+
     if (!currentSessionId) {
       setMessages([]);
       setNotes([]);
@@ -578,15 +874,8 @@ export function ChatWorkspace({
       return;
     }
 
-    // Skip if already loading this session
-    if (isLoadingRef.current) {
-      return;
-    }
-
-    // Skip if we've already loaded messages for this session
-    if (loadedSessionRef.current === currentSessionId) {
-      return;
-    }
+    if (isLoadingRef.current) return;
+    if (loadedSessionRef.current === currentSessionId) return;
 
     isLoadingRef.current = true;
     setLoadingHistory(true);
@@ -596,51 +885,51 @@ export function ChatWorkspace({
         if (!res.ok) throw new Error("Failed to load");
         return res.json();
       })
-      .then((data: {
-        messages: Array<{
-          id: string;
-          role: "user" | "assistant";
-          content: string;
-          image_url?: string | null;
-          citations: Array<{
-            filename: string;
-            chunk_index: number;
-            content_preview: string;
+      .then(
+        (data: {
+          messages: Array<{
+            id: string;
+            role: "user" | "assistant";
+            content: string;
+            image_url?: string | null;
+            citations: Array<{
+              filename: string;
+              chunk_index: number;
+              content_preview: string;
+            }>;
           }>;
-        }>;
-        annotations: PersistedAnnotation[];
-      }) => {
-        const annotationMap = new Map(
-          (data.annotations ?? []).map((annotation) => [
-            annotation.message_id,
-            annotation,
-          ]),
-        );
+          annotations: PersistedAnnotation[];
+        }) => {
+          const annotationMap = new Map(
+            (data.annotations ?? []).map((a) => [a.message_id, a]),
+          );
 
-        const newMessages: ChatMessage[] = data.messages.map((message) => {
-          const annotation = annotationMap.get(message.id);
-          return {
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            imageUrl: message.image_url ?? null,
-            citations: message.citations?.map((citation, index) => ({
-              index: index + 1,
-              snippet: citation.content_preview ?? "",
-            })),
-            highlightColor: annotation?.highlight_color as HighlightColor ?? null,
-            selectionStart: annotation?.selection_start ?? null,
-            selectionEnd: annotation?.selection_end ?? null,
-          };
-        });
+          const newMessages: ChatMessage[] = data.messages.map((msg) => {
+            const ann = annotationMap.get(msg.id);
+            return {
+              id: msg.id,
+              role: msg.role,
+              content: msg.content,
+              imageUrl: msg.image_url ?? null,
+              citations: msg.citations?.map((c, i) => ({
+                index: i + 1,
+                snippet: c.content_preview ?? "",
+              })),
+              highlightColor: (ann?.highlight_color as HighlightColor) ?? null,
+              selectionStart: ann?.selection_start ?? null,
+              selectionEnd: ann?.selection_end ?? null,
+            };
+          });
 
-        setMessages(newMessages);
-        setNotes(buildNotesFromAnnotations(data.annotations ?? []));
-        loadedSessionRef.current = currentSessionId;
+          const newNotes = buildNotesFromAnnotations(data.annotations ?? []);
 
-        // Scroll to bottom after state updates
-        requestAnimationFrame(() => scrollToLatest("auto"));
-      })
+          setMessages(newMessages);
+          setNotes(newNotes);
+          loadedSessionRef.current = currentSessionId;
+
+          requestAnimationFrame(() => scrollToLatest("auto"));
+        },
+      )
       .catch((error) => {
         console.error("Failed to load chat history:", error);
         toast.error("Failed to load chat history");
@@ -651,174 +940,213 @@ export function ChatWorkspace({
       });
   }, [currentSessionId, buildNotesFromAnnotations, scrollToLatest]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
-      if (imagePreview) URL.revokeObjectURL(imagePreview);
-    };
-  }, [imagePreview]);
+  // ── Image handling ─────────────────────────────────────────────
+  const handleImageSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setSelectedImage(file);
+      setImagePreview(URL.createObjectURL(file));
+      e.target.value = "";
+    },
+    [],
+  );
 
-  // Handle image selection
-  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setSelectedImage(file);
-    setImagePreview(URL.createObjectURL(file));
-    e.target.value = "";
-  }, []);
-
-  // Remove selected image
   const removeSelectedImage = useCallback(() => {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setSelectedImage(null);
     setImagePreview(null);
   }, [imagePreview]);
 
-  // Handle submit
-  const handleSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed && !selectedImage) return;
-    if (!currentDocumentId) return;
+  // ── Submit ────────────────────────────────────────────────────
+  const handleSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const trimmed = input.trim();
+      if (!trimmed && !selectedImage) return;
+      if (!currentDocumentId) return;
 
-    let imageUrl: string | undefined;
+      let imageUrl: string | undefined;
 
-    // Upload image if present
-    if (selectedImage) {
-      setUploadingImage(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", selectedImage);
-        const res = await fetch("/api/chat-images", {
-          method: "POST",
-          body: formData,
-        });
-        const data = await res.json();
-        if (!res.ok || !data.url) {
-          throw new Error(data.error || "Upload failed");
-        }
-        imageUrl = data.url;
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Upload failed");
-        setUploadingImage(false);
-        return;
-      } finally {
-        setUploadingImage(false);
-      }
-    }
-
-    const userMessage: ChatMessage = {
-      id: createMessageId(),
-      role: "user",
-      content: trimmed,
-      imageUrl: imageUrl ?? null,
-    };
-
-    // Clear input and image
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setSelectedImage(null);
-    if (imagePreview) {
-      URL.revokeObjectURL(imagePreview);
-    }
-    setImagePreview(null);
-    setSending(true);
-    setHighlightMode(false);
-    setSelectedExcerpt(null);
-
-    // Scroll to bottom
-    requestAnimationFrame(() => scrollToLatest());
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          documentId: currentDocumentId,
-          message: trimmed,
-          imageUrl,
-          sessionId: currentSessionId,
-        }),
-      });
-
-      const payload = (await response.json()) as
-        | {
-            answer?: string;
-            citations?: Citation[];
-            sessionId?: string;
-            assistantMessageId?: string | null;
-            reused?: boolean;
-            error?: string;
+      if (selectedImage) {
+        setUploadingImage(true);
+        try {
+          const formData = new FormData();
+          formData.append("file", selectedImage);
+          const res = await fetch("/api/chat-images", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json();
+          if (!res.ok || !data.url) {
+            throw new Error(data.error || "Upload failed");
           }
-        | null;
-
-      if (!response.ok || !payload?.answer) {
-        throw new Error(payload?.error || "Could not get an answer.");
+          imageUrl = data.url;
+        } catch (error) {
+          toast.error(
+            error instanceof Error ? error.message : "Upload failed",
+          );
+          setUploadingImage(false);
+          return;
+        } finally {
+          setUploadingImage(false);
+        }
       }
 
-      const answer = payload.answer;
-      const citations = payload.citations ?? [];
-      const assistantMessageId = payload.assistantMessageId ?? createMessageId();
+      const userMessage: ChatMessage = {
+        id: createMessageId(),
+        role: "user",
+        content: trimmed,
+        imageUrl: imageUrl ?? null,
+      };
 
-      // Add messages together to prevent double render
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          content: answer,
-          citations,
-          highlightColor: null,
-          selectionStart: null,
-          selectionEnd: null,
-        },
-      ]);
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+      setSelectedImage(null);
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
+      setImagePreview(null);
+      setSending(true);
+      setHighlightPickerMessageId(null);
+      setPendingSelection(null);
 
-      // Update URL with session ID if new
-      if (payload.sessionId && payload.sessionId !== currentSessionId) {
-        setCurrentSessionId(payload.sessionId);
-        router.replace(`/chat?documentId=${currentDocumentId}&sessionId=${payload.sessionId}`);
-      }
-
-      // Scroll after message appears
       requestAnimationFrame(() => scrollToLatest());
 
-      if (payload.reused) {
-        toast.success("Reused a previous exact answer.");
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Could not get an answer.";
-      setMessages((prev) => [
-        ...prev,
-        { id: createMessageId(), role: "assistant", content: errorMessage },
-      ]);
-      requestAnimationFrame(() => scrollToLatest());
-    } finally {
-      setSending(false);
-    }
-  }, [input, currentDocumentId, currentSessionId, selectedImage, imagePreview, scrollToLatest, router]);
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            documentId: currentDocumentId,
+            message: trimmed,
+            imageUrl,
+            sessionId: currentSessionId,
+          }),
+        });
 
-  // Handle new chat
+        const payload = (await response.json()) as
+          | {
+              answer?: string;
+              citations?: Citation[];
+              sessionId?: string;
+              assistantMessageId?: string | null;
+              reused?: boolean;
+              error?: string;
+            }
+          | null;
+
+        if (!response.ok || !payload?.answer) {
+          throw new Error(payload?.error || "Could not get an answer.");
+        }
+
+        const answer = payload.answer;
+        const citations = payload.citations ?? [];
+        const assistantMessageId =
+          payload.assistantMessageId ?? createMessageId();
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantMessageId,
+            role: "assistant",
+            content: answer,
+            citations,
+            highlightColor: null,
+            selectionStart: null,
+            selectionEnd: null,
+          },
+        ]);
+
+        if (
+          payload.sessionId &&
+          payload.sessionId !== currentSessionId
+        ) {
+          setCurrentSessionId(payload.sessionId);
+          router.replace(
+            `/chat?documentId=${currentDocumentId}&sessionId=${payload.sessionId}`,
+          );
+        }
+
+        requestAnimationFrame(() => scrollToLatest());
+
+        if (payload.reused) {
+          toast.success("Reused a previous exact answer.");
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : "Could not get an answer.";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createMessageId(),
+            role: "assistant",
+            content: errorMessage,
+            highlightColor: null,
+            selectionStart: null,
+            selectionEnd: null,
+          },
+        ]);
+        requestAnimationFrame(() => scrollToLatest());
+      } finally {
+        setSending(false);
+      }
+    },
+    [
+      input,
+      currentDocumentId,
+      currentSessionId,
+      selectedImage,
+      imagePreview,
+      scrollToLatest,
+      router,
+    ],
+  );
+
+  // ── Navigation ────────────────────────────────────────────────
   const handleNewChat = useCallback(() => {
     if (currentDocumentId) {
       router.push(`/chat?documentId=${currentDocumentId}`);
     }
   }, [currentDocumentId, router]);
 
-  // Handle document change
-  const handleDocumentChange = useCallback((newDocId: string) => {
-    router.push(`/chat?documentId=${newDocId}`);
-  }, [router]);
+  const handleDocumentChange = useCallback(
+    (newDocId: string) => {
+      router.push(`/chat?documentId=${newDocId}`);
+    },
+    [router],
+  );
 
+  // ── Highlight picker toggle ────────────────────────────────────
+  const handleHighlightPickerToggle = useCallback(
+    (messageId: string | null) => {
+      setHighlightPickerMessageId(messageId);
+      if (messageId === null) {
+        setPendingSelection(null);
+        pendingSelectionRef.current = null;
+      }
+    },
+    [],
+  );
+
+  // ── Render ────────────────────────────────────────────────────
   return (
     <div className="flex h-full min-h-0">
-      {/* Sidebar - Sessions */}
-      <aside className="w-64 shrink-0 border-r border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900">
+      {/* ── Sidebar ───────────────────────────────────────────── */}
+      <aside
+        style={{ width: sidebarWidth }}
+        className="relative shrink-0 border-r border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900"
+      >
+        {/* Horizontal resize handle */}
+        <div
+          onMouseDown={startSidebarResize}
+          className="absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize opacity-0 hover:opacity-100 transition-opacity"
+        >
+          <div className="ml-[-1px] h-full w-0.5 bg-stone-300 dark:bg-stone-600" />
+        </div>
+
         <div className="flex h-full flex-col">
-          {/* New chat button */}
+          {/* New chat */}
           <div className="border-b border-stone-200 p-3 dark:border-stone-800">
             <button
               type="button"
@@ -830,7 +1158,7 @@ export function ChatWorkspace({
             </button>
           </div>
 
-          {/* Document list */}
+          {/* Documents */}
           <div className="flex-1 overflow-y-auto p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-stone-500 dark:text-stone-400">
@@ -857,6 +1185,18 @@ export function ChatWorkspace({
             </div>
           </div>
 
+          {/* Pinned notes indicator */}
+          {pinnedNotes.length > 0 && (
+            <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
+              <div className="mb-1 flex items-center gap-1">
+                <Pin className="h-3 w-3 fill-amber-400 text-amber-400" />
+                <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                  Pinned ({pinnedNotes.length}/3)
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Notes section */}
           {notes.length > 0 && (
             <div className="border-t border-stone-200 p-3 dark:border-stone-800">
@@ -866,27 +1206,63 @@ export function ChatWorkspace({
                 </span>
               </div>
               <div className="space-y-1">
-                {notes.slice(0, 5).map((note) => {
-                  const message = messages.find((m) => m.id === note.messageId);
+                {sortedNotes.map((note) => {
+                  const message = messages.find(
+                    (m) => m.id === note.messageId,
+                  );
                   if (!message) return null;
                   return (
-                    <button
+                    <div
                       key={note.id}
-                      type="button"
-                      onClick={() => {
-                        const element = messageRefs.current[note.messageId];
-                        if (element) {
-                          element.scrollIntoView({ behavior: "smooth", block: "center" });
-                          handleFlash(note.messageId);
-                        }
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg bg-stone-100 px-3 py-2 text-left text-xs transition-all hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700"
+                      className="group flex items-center gap-1 rounded-lg bg-stone-100 px-2 py-1.5 transition-all hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700"
                     >
-                      <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-stone-400" />
-                      <span className="truncate text-stone-600 dark:text-stone-300">
-                        {(message.content ?? "").slice(0, 40)}...
-                      </span>
-                    </button>
+                      {/* Navigate on click */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          scrollToMessage(note.messageId);
+                          handleFlash(note.messageId);
+                        }}
+                        className="flex flex-1 items-center gap-2 text-left text-xs"
+                      >
+                        <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+                        <span className="min-w-0 flex-1 truncate text-stone-600 dark:text-stone-300">
+                          {(message.content ?? "").slice(0, 40)}
+                          {(message.content ?? "").length > 40 ? "..." : ""}
+                        </span>
+                      </button>
+
+                      {/* Pin button */}
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePin(note.id)}
+                        disabled={!note.isPinned && pinnedCount >= 3}
+                        title={
+                          note.isPinned
+                            ? "Unpin note"
+                            : `Pin note (${pinnedCount}/3)`
+                        }
+                        className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 dark:hover:bg-stone-600 dark:hover:text-stone-300"
+                      >
+                        <Pin
+                          className={`h-3 w-3 ${
+                            note.isPinned
+                              ? "fill-amber-400 text-amber-400"
+                              : ""
+                          }`}
+                        />
+                      </button>
+
+                      {/* Remove button */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleNote(note.messageId)}
+                        title="Remove note"
+                        className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-600 dark:hover:text-stone-300"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -895,7 +1271,7 @@ export function ChatWorkspace({
         </div>
       </aside>
 
-      {/* Chat Area */}
+      {/* ── Chat area ─────────────────────────────────────────── */}
       <main className="flex flex-1 flex-col min-w-0">
         {/* Header */}
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50 px-4 dark:border-stone-800 dark:bg-stone-900">
@@ -914,14 +1290,15 @@ export function ChatWorkspace({
               )}
             </div>
           </div>
-          
-          {/* Document selector */}
+
           <div className="ml-3 flex items-center gap-1.5">
-            <span className="text-xs text-stone-400 dark:text-stone-500">Chatting with:</span>
+            <span className="text-xs text-stone-400 dark:text-stone-500">
+              Chatting with:
+            </span>
             <select
               value={currentDocumentId ?? ""}
               onChange={(e) => handleDocumentChange(e.target.value)}
-              className="appearance-none rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 cursor-pointer"
+              className="appearance-none cursor-pointer rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400"
             >
               {documents.map((doc) => (
                 <option key={doc.id} value={doc.id}>
@@ -954,7 +1331,10 @@ export function ChatWorkspace({
                 Start a conversation
               </h3>
               <p className="mb-4 max-w-md text-sm text-stone-500 dark:text-stone-400">
-                Ask anything about <span className="font-medium text-stone-600 dark:text-stone-300">{selectedDocument?.filename ?? "your document"}</span>
+                Ask anything about{" "}
+                <span className="font-medium text-stone-600 dark:text-stone-300">
+                  {selectedDocument?.filename ?? "your document"}
+                </span>
               </p>
               <div className="grid grid-cols-2 gap-2">
                 {[
@@ -979,21 +1359,24 @@ export function ChatWorkspace({
                 <MessageBubble
                   key={message.id}
                   message={message}
+                  isSaved={noteIdsMap.has(message.id)}
                   flashedMessageId={flashedMessageId}
                   copiedMessageId={copiedMessageId}
-                  highlightMode={highlightMode}
-                  selectedExcerpt={selectedExcerpt}
-                  onHighlightModeChange={setHighlightMode}
-                  onHighlight={handleHighlightMessage}
+                  highlightPickerOpen={
+                    highlightPickerMessageId === message.id
+                  }
+                  onHighlightPickerToggle={handleHighlightPickerToggle}
+                  onHighlight={handleHighlight}
                   onCopy={copyToClipboard}
                   onToggleNote={handleToggleNote}
-                  onSelectExcerpt={handleSelectExcerpt}
                   onDeleteMessage={handleDeleteMessage}
                   onFlash={handleFlash}
+                  onRef={(el) => {
+                    messageRefs.current[message.id] = el;
+                  }}
                 />
               ))}
 
-              {/* Typing indicator */}
               {sending && <TypingIndicator />}
             </div>
           )}
@@ -1011,8 +1394,23 @@ export function ChatWorkspace({
           </button>
         )}
 
+        {/* Vertical resize handle between messages and input */}
+        <div
+          onMouseDown={startInputResize}
+          className="group h-2 shrink-0 cursor-row-resize flex items-center justify-center bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 transition-colors"
+        >
+          <div className="h-0.5 w-8 rounded-full bg-stone-300 dark:bg-stone-600 group-hover:bg-stone-400 dark:group-hover:bg-stone-500 transition-colors" />
+        </div>
+
         {/* Input */}
-        <div className="shrink-0 border-t border-stone-200 bg-stone-100/80 p-3 dark:border-stone-800 dark:bg-stone-900/80">
+        <div
+          style={
+            inputAreaHeight
+              ? { height: `${inputAreaHeight}px`, flexShrink: 0 }
+              : undefined
+          }
+          className="shrink-0 border-t border-stone-200 bg-stone-100/80 p-3 dark:border-stone-800 dark:bg-stone-900/80"
+        >
           <form onSubmit={handleSubmit} className="flex flex-col gap-2">
             {/* Image preview */}
             {imagePreview && (
@@ -1034,7 +1432,9 @@ export function ChatWorkspace({
                     {selectedImage?.name}
                   </p>
                   <p className="text-[10px] text-stone-400">
-                    {selectedImage && (selectedImage.size / 1024).toFixed(1)} KB
+                    {selectedImage &&
+                      (selectedImage.size / 1024).toFixed(1)}{" "}
+                    KB
                     {uploadingImage && " • Uploading..."}
                   </p>
                 </div>
@@ -1050,11 +1450,17 @@ export function ChatWorkspace({
             )}
 
             <div className="flex items-center gap-2">
-              {/* Image attachment button */}
+              {/* Image attachment */}
               <label
-                className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${(!selectedDocument || sending) ? "opacity-50 cursor-not-allowed" : ""}`}
+                data-testid="image-upload-label"
+                className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${
+                  !selectedDocument || sending
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
               >
                 <input
+                  data-testid="image-upload-input"
                   type="file"
                   accept="image/jpeg,image/png,image/gif,image/webp"
                   onChange={handleImageSelect}
@@ -1079,10 +1485,14 @@ export function ChatWorkspace({
                 className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:text-white dark:placeholder:text-stone-500 dark:focus:border-stone-600 dark:focus:ring-stone-700"
               />
 
-              {/* Send button */}
+              {/* Send */}
               <button
                 type="submit"
-                disabled={(!input.trim() && !selectedImage) || !selectedDocument || sending}
+                disabled={
+                  (!input.trim() && !selectedImage) ||
+                  !selectedDocument ||
+                  sending
+                }
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white transition-all hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-stone-700 dark:hover:bg-stone-600"
               >
                 {sending ? (
