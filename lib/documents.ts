@@ -34,12 +34,13 @@ function createSupabaseAdminClient() {
   });
 }
 
-// documents table columns: id, filename, content, summary, created_at
-export async function listUserDocuments(_userId: string) {
+// documents table columns: id, filename, content, summary, created_at, user_id
+export async function listUserDocuments(userId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
     .select("id, filename, summary")
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -50,12 +51,13 @@ export async function listUserDocuments(_userId: string) {
   return (data ?? []) as StoredDocument[];
 }
 
-export async function getUserDocument(_userId: string, documentId: string) {
+export async function getUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
     .select("id, filename, content, summary")
     .eq("id", documentId)
+    .eq("user_id", userId)
     .maybeSingle();
 
   if (error) {
@@ -98,7 +100,7 @@ export async function listDocumentEmbeddings(documentId: string) {
   return chunks;
 }
 
-export async function deleteUserDocument(_userId: string, documentId: string) {
+export async function deleteUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { error: embeddingError } = await supabase
     .from("document_embeddings")
@@ -114,7 +116,8 @@ export async function deleteUserDocument(_userId: string, documentId: string) {
   const { error: documentError } = await supabase
     .from("documents")
     .delete()
-    .eq("id", documentId);
+    .eq("id", documentId)
+    .eq("user_id", userId);
 
   if (documentError) {
     throw new Error(documentError.message || "Could not delete document.");

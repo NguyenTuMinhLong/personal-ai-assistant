@@ -319,6 +319,7 @@ interface MessageBubbleProps {
   onToggleNote: (messageId: string) => Promise<void>;
   onDeleteMessage: (messageId: string) => void;
   onFlash: (messageId: string) => void;
+  onPendingSelectionChange: (selection: { messageId: string; text: string; selectionStart: number; selectionEnd: number } | null) => void;
   onRef?: (el: HTMLDivElement | null) => void;
 }
 
@@ -334,6 +335,7 @@ const MessageBubble = memo(function MessageBubble({
   onToggleNote,
   onDeleteMessage,
   onFlash,
+  onPendingSelectionChange,
   onRef,
 }: MessageBubbleProps) {
   const isUser = message.role === "user";
@@ -361,19 +363,13 @@ const MessageBubble = memo(function MessageBubble({
     preDiv.appendChild(preFragment);
     const charsBefore = preDiv.textContent?.length ?? 0;
 
-    setPendingSelection({
+    onPendingSelectionChange({
       messageId: message.id,
       text: selectedText,
       selectionStart: charsBefore,
       selectionEnd: charsBefore + selectedText.length,
     });
-    pendingSelectionRef.current = {
-      messageId: message.id,
-      text: selectedText,
-      selectionStart: charsBefore,
-      selectionEnd: charsBefore + selectedText.length,
-    };
-  }, [highlightPickerOpen, isUser, message.id]);
+  }, [highlightPickerOpen, isUser, message.id, onPendingSelectionChange]);
 
   return (
     <div
@@ -814,17 +810,22 @@ export function ChatWorkspace({
       if (existingNote) {
         if (currentSessionId) {
           try {
-            await fetch("/api/annotations", {
+            const res = await fetch("/api/annotations", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ messageId, sessionId: currentSessionId }),
             });
+            if (!res.ok) throw new Error("Delete failed");
+            setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+            toast.success("Note removed");
           } catch {
-            // best-effort
+            toast.error("Failed to remove note");
           }
+        } else {
+          // No session — remove locally only (fire-and-forget with local-only state)
+          setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
+          toast.error("Note removed locally — no active session to persist to");
         }
-        setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
-        toast.success("Note removed");
       } else {
         await handleSaveAnnotation(messageId, noteContent);
         const newNote: SavedNote = { id: createMessageId(), messageId };
@@ -841,7 +842,11 @@ export function ChatWorkspace({
   const handleTogglePin = useCallback(
     async (noteId: string) => {
       const note = notes.find((n) => n.id === noteId);
-      if (!note || !currentSessionId) return;
+      if (!note) return;
+      if (!currentSessionId) {
+        toast.error("Cannot pin note: no active session");
+        return;
+      }
 
       const pinnedNow = !note.isPinned;
       if (pinnedNow && pinnedCount >= 3) {
@@ -1537,12 +1542,14 @@ export function ChatWorkspace({
                   highlightPickerOpen={
                     highlightPickerMessageId === message.id
                   }
+                  pendingSelection={pendingSelection}
                   onHighlightPickerToggle={handleHighlightPickerToggle}
                   onHighlight={handleHighlight}
                   onCopy={copyToClipboard}
                   onToggleNote={handleToggleNote}
                   onDeleteMessage={handleDeleteMessage}
                   onFlash={handleFlash}
+                  onPendingSelectionChange={setPendingSelection}
                   onRef={(el) => {
                     messageRefs.current[message.id] = el;
                   }}
