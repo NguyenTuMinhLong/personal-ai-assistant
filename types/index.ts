@@ -32,6 +32,7 @@ export type Message = {
   session_id: string;
   role: 'user' | 'assistant';
   content: string;
+  imageUrls?: string[];
   imageUrl?: string | null;
   citations: Citation[];
   created_at: string;

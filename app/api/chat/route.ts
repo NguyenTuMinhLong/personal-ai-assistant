@@ -24,6 +24,7 @@ type RequestBody = {
   documentId?: string;
   message?: string;
   imageUrl?: string;
+  imageUrls?: string[];
   sessionId?: string;
 };
 
@@ -114,6 +115,7 @@ export async function POST(req: NextRequest) {
 
   const message = body.message?.trim();
   const imageUrl = body.imageUrl?.trim() || undefined;
+  const imageUrls = body.imageUrls?.filter((u: string) => u.trim()) || undefined;
   const documentId = body.documentId?.trim();
   const incomingSessionId = body.sessionId?.trim();
 
@@ -183,7 +185,8 @@ export async function POST(req: NextRequest) {
       let assistantMessageId: string | null = null;
 
       if (sessionId) {
-        await saveMessage(sessionId, "user", message, [], imageUrl);
+        const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
+        await saveMessage(sessionId, "user", message, [], allImageUrls);
 
         const savedAssistantMessage = await saveMessage(
           sessionId,
@@ -407,7 +410,9 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
     let assistantMessageId: string | null = null;
 
     if (sessionId) {
-      const savedUserMessage = await saveMessage(sessionId, "user", message, [], imageUrl);
+      // Pass all image URLs to saveMessage
+      const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
+      const savedUserMessage = await saveMessage(sessionId, "user", message, [], allImageUrls);
 
       if (!savedUserMessage) {
         console.error("[chat] Failed to save user message, continuing anyway");

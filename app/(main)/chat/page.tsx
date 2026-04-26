@@ -72,11 +72,13 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   );
   const transformedMessages = initialMessages.map((msg, index) => {
     const ann = highlightMap.get(msg.id);
+    // Support both single imageUrl and array imageUrls
+    const urls = msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : []);
     return {
       id: msg.id,
       role: msg.role,
       content: msg.content,
-      imageUrl: msg.imageUrl ?? null,
+      imageUrls: urls.length > 0 ? urls : undefined,
       citations: (msg.citations ?? []).map((c, i) => ({
         index: i + 1,
         snippet: c.contentPreview ?? "",

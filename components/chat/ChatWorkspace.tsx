@@ -1,6 +1,7 @@
 "use client";
 
 import React, {
+  FormEvent,
   memo,
   useCallback,
   useEffect,
@@ -23,10 +24,12 @@ import {
   Sparkles,
   Trash2,
   X,
+  ZoomIn,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
+import { ImageLightbox } from "./ImageLightbox";
 import { useChatSessions } from "@/hooks/useChatSessions";
 import type { StoredDocument } from "@/lib/documents";
 
@@ -41,12 +44,12 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  imageUrl?: string | null;
+  imageUrls?: string[];
   citations?: Citation[];
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
-  createdAt?: string;
+  createdAt?: string | null;
 };
 
 type SavedNote = {
@@ -104,6 +107,14 @@ function formatRelativeTime(dateStr: string): string {
   if (days < 7) return `${days}d ago`;
 
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// Client-only timestamp wrapper to avoid SSR hydration mismatch
+function RelativeTime({ dateStr }: { dateStr: string }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <span suppressHydrationWarning>...</span>;
+  return <span suppressHydrationWarning>{formatRelativeTime(dateStr)}</span>;
 }
 
 // ─── Highlight color swatch button ──────────────────────────────
@@ -337,10 +348,11 @@ const MessageBubble = memo(function MessageBubble({
   onFlash,
   onPendingSelectionChange,
   onRef,
-}: MessageBubbleProps) {
+}: Omit<MessageBubbleProps, "onImageClick">) {
   const isUser = message.role === "user";
   const isFlashed = flashedMessageId === message.id;
   const isCopied = copiedMessageId === message.id;
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   // Capture text selection when highlight picker is open for this message
   const handleTextSelection = useCallback(() => {
@@ -408,10 +420,10 @@ const MessageBubble = memo(function MessageBubble({
             <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
               {isUser ? "You" : "SecondBrain"}
             </span>
-            {message.imageUrl && (
+            {message.imageUrls && message.imageUrls.length > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-[10px] font-medium text-stone-500 dark:bg-stone-800 dark:text-stone-400">
                 <ImagePlus className="h-3 w-3" />
-                Image attached
+                {message.imageUrls.length} image{message.imageUrls.length > 1 ? "s" : ""} attached
               </span>
             )}
             {message.highlightColor && (
@@ -423,7 +435,7 @@ const MessageBubble = memo(function MessageBubble({
             )}
             {message.createdAt && (
               <span className="text-[10px] text-stone-400 dark:text-stone-500">
-                {formatRelativeTime(message.createdAt)}
+                <RelativeTime dateStr={message.createdAt} />
               </span>
             )}
           </div>
@@ -438,12 +450,31 @@ const MessageBubble = memo(function MessageBubble({
             } ${highlightPickerOpen && !isUser ? "ring-2 ring-stone-400 dark:ring-stone-500" : ""}`}
             onMouseUp={handleTextSelection}
           >
-            {message.imageUrl && (
-              <img
-                src={message.imageUrl}
-                alt="Attached"
-                className="mb-2 max-h-48 rounded-lg border border-stone-200 object-contain dark:border-stone-700"
-              />
+            {/* Multiple images - horizontal scrollable row */}
+            {message.imageUrls && message.imageUrls.length > 0 && (
+              <div className="mb-2 flex gap-2 overflow-x-auto">
+                {message.imageUrls.slice(0, 5).map((url, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setLightboxImage(url)}
+                    className="relative group shrink-0 cursor-zoom-in"
+                  >
+                    <img
+                      src={url}
+                      alt={`Attached ${idx + 1}`}
+                      className="h-20 w-20 rounded-lg border border-stone-200 object-cover transition-all hover:opacity-90 dark:border-stone-700"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 transition-all group-hover:bg-black/20">
+                      <ZoomIn className="h-4 w-4 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg" />
+                    </div>
+                    {message.imageUrls && message.imageUrls.length > 5 && idx === 4 && (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/60">
+                        <span className="text-sm font-medium text-white">+{message.imageUrls.length - 5}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
               <HighlightedText
@@ -521,6 +552,14 @@ const MessageBubble = memo(function MessageBubble({
           )}
         </div>
       </div>
+
+      {/* Lightbox */}
+      {lightboxImage && (
+        <ImageLightbox
+          imageUrl={lightboxImage}
+          onClose={() => setLightboxImage(null)}
+        />
+      )}
     </div>
   );
 });
@@ -563,8 +602,8 @@ export function ChatWorkspace({
     () => initialNotes ?? [],
   );
   const [input, setInput] = useState("");
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -573,6 +612,7 @@ export function ChatWorkspace({
     null,
   );
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Per-message highlight: which message has its color picker open
   const [highlightPickerMessageId, setHighlightPickerMessageId] =
@@ -666,9 +706,9 @@ export function ChatWorkspace({
   useEffect(() => {
     return () => {
       if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
-      if (imagePreview) URL.revokeObjectURL(imagePreview);
+      imagePreviews.forEach((preview) => URL.revokeObjectURL(preview));
     };
-  }, [imagePreview]);
+  }, [imagePreviews]);
 
   // ── Scroll helpers ────────────────────────────────────────────
   const updateScrollState = useCallback(() => {
@@ -793,8 +833,9 @@ export function ChatWorkspace({
         | { success: false; error: string }
         | null;
 
-      if (!res.ok || !payload?.success) {
-        throw new Error(payload?.error || "Could not save annotation.");
+      if (!res.ok || !payload || !payload.success) {
+        const errorMsg = payload && "error" in payload ? payload.error : "Could not save annotation.";
+        throw new Error(errorMsg);
       }
     },
     [currentSessionId],
@@ -958,6 +999,7 @@ export function ChatWorkspace({
             role: "user" | "assistant";
             content: string;
             image_url?: string | null;
+            image_urls?: string[];
             citations: Array<{
               filename: string;
               chunk_index: number;
@@ -973,11 +1015,12 @@ export function ChatWorkspace({
 
           const newMessages: ChatMessage[] = data.messages.map((msg) => {
             const ann = annotationMap.get(msg.id);
+            const urls = msg.image_urls ?? (msg.image_url ? [msg.image_url] : []);
             return {
               id: msg.id,
               role: msg.role,
               content: msg.content,
-              imageUrl: msg.image_url ?? null,
+              imageUrls: urls.length > 0 ? urls : undefined,
               citations: msg.citations?.map((c, i) => ({
                 index: i + 1,
                 snippet: c.content_preview ?? "",
@@ -1011,45 +1054,103 @@ export function ChatWorkspace({
   // ── Image handling ─────────────────────────────────────────────
   const handleImageSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      setSelectedImage(file);
-      setImagePreview(URL.createObjectURL(file));
+      const files = Array.from(e.target.files ?? []);
+      if (files.length === 0) return;
+
+      // Limit to 5 images
+      const newFiles = files.slice(0, 5 - selectedImages.length);
+      const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
+
+      setSelectedImages((prev) => [...prev, ...newFiles].slice(0, 5));
+      setImagePreviews((prev) => [...prev, ...newPreviews].slice(0, 5));
       e.target.value = "";
     },
-    [],
+    [selectedImages.length],
   );
 
-  const removeSelectedImage = useCallback(() => {
-    if (imagePreview) URL.revokeObjectURL(imagePreview);
-    setSelectedImage(null);
-    setImagePreview(null);
-  }, [imagePreview]);
+  const removeSelectedImage = useCallback(
+    (index: number) => {
+      if (imagePreviews[index]) URL.revokeObjectURL(imagePreviews[index]);
+      setSelectedImages((prev) => prev.filter((_, i) => i !== index));
+      setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+    },
+    [imagePreviews],
+  );
+
+  const clearAllImages = useCallback(() => {
+    imagePreviews.forEach((preview) => URL.revokeObjectURL(preview));
+    setSelectedImages([]);
+    setImagePreviews([]);
+  }, [imagePreviews]);
+
+  // ── Drag and drop ──────────────────────────────────────────────
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingOver(false);
+
+      if (!currentDocumentId || sending) return;
+
+      const files = Array.from(e.dataTransfer.files).filter((file) =>
+        file.type.startsWith("image/"),
+      );
+
+      if (files.length === 0) return;
+
+      const newFiles = files.slice(0, 5 - selectedImages.length);
+      const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
+
+      setSelectedImages((prev) => [...prev, ...newFiles].slice(0, 5));
+      setImagePreviews((prev) => [...prev, ...newPreviews].slice(0, 5));
+
+      if (newFiles.length > 0) {
+        toast.success(`Added ${newFiles.length} image${newFiles.length > 1 ? "s" : ""}`);
+      }
+    },
+    [currentDocumentId, sending, selectedImages.length],
+  );
 
   // ── Submit ────────────────────────────────────────────────────
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const trimmed = input.trim();
-      if (!trimmed && !selectedImage) return;
+      if (!trimmed && selectedImages.length === 0) return;
       if (!currentDocumentId) return;
 
-      let imageUrl: string | undefined;
+      // Upload all images
+      let imageUrls: string[] = [];
 
-      if (selectedImage) {
+      if (selectedImages.length > 0) {
         setUploadingImage(true);
         try {
-          const formData = new FormData();
-          formData.append("file", selectedImage);
-          const res = await fetch("/api/chat-images", {
-            method: "POST",
-            body: formData,
-          });
-          const data = await res.json();
-          if (!res.ok || !data.url) {
-            throw new Error(data.error || "Upload failed");
+          // Upload images sequentially
+          for (const file of selectedImages) {
+            const formData = new FormData();
+            formData.append("file", file);
+            const res = await fetch("/api/chat-images", {
+              method: "POST",
+              body: formData,
+            });
+            const data = await res.json();
+            if (!res.ok || !data.url) {
+              throw new Error(data.error || "Upload failed");
+            }
+            imageUrls.push(data.url);
           }
-          imageUrl = data.url;
         } catch (error) {
           toast.error(
             error instanceof Error ? error.message : "Upload failed",
@@ -1065,15 +1166,13 @@ export function ChatWorkspace({
         id: createMessageId(),
         role: "user",
         content: trimmed,
-        imageUrl: imageUrl ?? null,
+        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         createdAt: new Date().toISOString(),
       };
 
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
-      setSelectedImage(null);
-      if (imagePreview) URL.revokeObjectURL(imagePreview);
-      setImagePreview(null);
+      clearAllImages();
       setSending(true);
       setHighlightPickerMessageId(null);
       setPendingSelection(null);
@@ -1081,13 +1180,14 @@ export function ChatWorkspace({
       requestAnimationFrame(() => scrollToLatest());
 
       try {
+        // Send all image URLs to API
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             documentId: currentDocumentId,
             message: trimmed,
-            imageUrl,
+            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
             sessionId: currentSessionId,
           }),
         });
@@ -1166,8 +1266,8 @@ export function ChatWorkspace({
       input,
       currentDocumentId,
       currentSessionId,
-      selectedImage,
-      imagePreview,
+      selectedImages,
+      clearAllImages,
       scrollToLatest,
       router,
     ],
@@ -1490,8 +1590,20 @@ export function ChatWorkspace({
         <div
           ref={scrollContainerRef}
           onScroll={updateScrollState}
-          className="flex-1 overflow-y-auto p-6"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`flex-1 overflow-y-auto p-6 transition-all ${
+            isDraggingOver ? "bg-stone-100/80 ring-2 ring-stone-400 ring-inset dark:bg-stone-800/80" : ""
+          }`}
         >
+          {isDraggingOver && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center rounded-lg bg-stone-100/90 dark:bg-stone-800/90">
+              <ImagePlus className="h-12 w-12 text-stone-400" />
+              <p className="mt-2 text-sm font-medium text-stone-500">Drop images here</p>
+              <p className="text-xs text-stone-400">Max 5 images</p>
+            </div>
+          )}
           {loadingHistory ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex items-center gap-3 text-stone-500 dark:text-stone-400">
@@ -1591,40 +1703,37 @@ export function ChatWorkspace({
           className="shrink-0 border-t border-stone-200 bg-stone-100/80 p-3 dark:border-stone-800 dark:bg-stone-900/80"
         >
           <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-            {/* Image preview */}
-            {imagePreview && (
-              <div className="flex items-center gap-2.5 rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800">
-                <div className="relative shrink-0">
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="h-10 w-10 rounded-md border border-stone-200 object-cover dark:border-stone-700"
-                  />
-                  {uploadingImage && (
-                    <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-stone-600 dark:text-stone-200">
-                    {selectedImage?.name}
-                  </p>
-                  <p className="text-[10px] text-stone-400">
-                    {selectedImage &&
-                      (selectedImage.size / 1024).toFixed(1)}{" "}
-                    KB
-                    {uploadingImage && " • Uploading..."}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={removeSelectedImage}
-                  disabled={uploadingImage}
-                  className="shrink-0 rounded p-1 text-stone-400 transition-all hover:bg-stone-100 hover:text-stone-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-stone-700"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+            {/* Multi-image preview */}
+            {imagePreviews.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800">
+                {imagePreviews.map((preview, idx) => (
+                  <div key={idx} className="relative group">
+                    <img
+                      src={preview}
+                      alt={`Preview ${idx + 1}`}
+                      className="h-12 w-12 rounded-md border border-stone-200 object-cover dark:border-stone-700"
+                    />
+                    {uploadingImage && (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50">
+                        <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeSelectedImage(idx)}
+                      disabled={uploadingImage}
+                      className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white opacity-0 transition-all hover:bg-red-600 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <span className="text-xs text-stone-500">
+                  {imagePreviews.length}/5 images
+                </span>
+                {uploadingImage && (
+                  <span className="text-xs text-stone-400">Uploading...</span>
+                )}
               </div>
             )}
 
@@ -1633,7 +1742,7 @@ export function ChatWorkspace({
               <label
                 data-testid="image-upload-label"
                 className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${
-                  !selectedDocument || sending
+                  !selectedDocument || sending || imagePreviews.length >= 5
                     ? "opacity-50 cursor-not-allowed"
                     : ""
                 }`}
@@ -1642,8 +1751,9 @@ export function ChatWorkspace({
                   data-testid="image-upload-input"
                   type="file"
                   accept="image/jpeg,image/png,image/gif,image/webp"
+                  multiple
                   onChange={handleImageSelect}
-                  disabled={!selectedDocument || sending}
+                  disabled={!selectedDocument || sending || imagePreviews.length >= 5}
                   className="hidden"
                 />
                 <ImagePlus className="h-4 w-4" />
@@ -1668,7 +1778,7 @@ export function ChatWorkspace({
               <button
                 type="submit"
                 disabled={
-                  (!input.trim() && !selectedImage) ||
+                  (!input.trim() && imagePreviews.length === 0) ||
                   !selectedDocument ||
                   sending
                 }

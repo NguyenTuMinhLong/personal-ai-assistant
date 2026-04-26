@@ -35,6 +35,7 @@ export async function GET(
     role: msg.role,
     content: msg.content,
     image_url: msg.imageUrl ?? null,
+    image_urls: msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : []),
     citations: msg.citations ?? [],
     created_at: msg.created_at,
   }));

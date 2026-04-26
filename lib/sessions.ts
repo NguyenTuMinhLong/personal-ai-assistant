@@ -167,20 +167,25 @@ export async function deleteChatSession(userId: string, sessionId: string) {
 }
 
 // ─── Messages ────────────────────────────────────────────────
-// messages columns: id, session_id, role, content, citations, created_at
+// messages columns: id, session_id, role, content, citations, image_url (JSON array), created_at
 
 export async function saveMessage(
   sessionId: string,
   role: "user" | "assistant",
   content: string,
   citations: Message["citations"] = [],
-  _imageUrl?: string | null,
+  _imageUrls?: string[] | null,
 ): Promise<Message | null> {
   const supabase = createSupabaseAdminClient();
 
+  // Store as JSON array (supports multiple images)
+  const imageUrlValue = _imageUrls && _imageUrls.length > 0
+    ? JSON.stringify(_imageUrls)
+    : null;
+
   const { data, error } = await supabase
     .from("messages")
-    .insert({ session_id: sessionId, role, content, citations, image_url: _imageUrl })
+    .insert({ session_id: sessionId, role, content, citations, image_url: imageUrlValue })
     .select()
     .single();
 
@@ -190,13 +195,23 @@ export async function saveMessage(
   }
 
   // Map snake_case DB response to camelCase Message type
-  const imageUrlVal = (data as Record<string, unknown>).image_url;
+  const imageUrlRaw = (data as Record<string, unknown>).image_url;
+  let imageUrls: string[] = [];
+  if (typeof imageUrlRaw === "string" && imageUrlRaw) {
+    try {
+      imageUrls = JSON.parse(imageUrlRaw);
+    } catch {
+      // Single URL stored as plain string (backward compat)
+      imageUrls = [imageUrlRaw];
+    }
+  }
   const mapped: Message = {
     id: String(data.id),
     session_id: String(data.session_id),
     role: data.role as "user" | "assistant",
     content: String(data.content ?? ""),
-    imageUrl: typeof imageUrlVal === "string" ? imageUrlVal : null,
+    imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+    imageUrl: imageUrls[0] ?? null,
     citations: Array.isArray(data.citations) ? data.citations : [],
     created_at: String(data.created_at ?? ""),
   };
@@ -218,13 +233,22 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
   }
 
   return (data ?? []).map((row) => {
-    const imageUrlVal = (row as Record<string, unknown>).image_url;
+    const imageUrlRaw = (row as Record<string, unknown>).image_url;
+    let imageUrls: string[] = [];
+    if (typeof imageUrlRaw === "string" && imageUrlRaw) {
+      try {
+        imageUrls = JSON.parse(imageUrlRaw);
+      } catch {
+        imageUrls = [imageUrlRaw];
+      }
+    }
     return {
       id: String(row.id),
       session_id: String(row.session_id),
       role: row.role as "user" | "assistant",
       content: String(row.content ?? ""),
-      imageUrl: typeof imageUrlVal === "string" ? imageUrlVal : null,
+      imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+      imageUrl: imageUrls[0] ?? null,
       citations: Array.isArray(row.citations) ? row.citations : [],
       created_at: String(row.created_at ?? ""),
     };
