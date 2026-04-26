@@ -1,5 +1,5 @@
 import { currentUser } from "@clerk/nextjs/server";
-import { embed, generateText, type ModelMessage, type UserModelMessage } from "ai";
+import { embed, generateText, type UserModelMessage } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
@@ -19,12 +19,17 @@ import {
   getCachedImageAnalysis,
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
+import {
+  getFileCache,
+  searchFileChunks,
+} from "@/lib/file-cache";
 
 type RequestBody = {
   documentId?: string;
   message?: string;
   imageUrl?: string;
   imageUrls?: string[];
+  chatFiles?: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number; extractedText?: string | null }>;
   sessionId?: string;
 };
 
@@ -116,6 +121,7 @@ export async function POST(req: NextRequest) {
   const message = body.message?.trim();
   const imageUrl = body.imageUrl?.trim() || undefined;
   const imageUrls = body.imageUrls?.filter((u: string) => u.trim()) || undefined;
+  const chatFiles = body.chatFiles || undefined;
   const documentId = body.documentId?.trim();
   const incomingSessionId = body.sessionId?.trim();
 
@@ -186,7 +192,7 @@ export async function POST(req: NextRequest) {
 
       if (sessionId) {
         const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
-        await saveMessage(sessionId, "user", message, [], allImageUrls);
+        await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
 
         const savedAssistantMessage = await saveMessage(
           sessionId,
@@ -284,6 +290,82 @@ export async function POST(req: NextRequest) {
     context = "";
   }
 
+  // ── Build file context from attached files ───────────────────
+  // extractedText is already provided from the upload response.
+  // Semantic search on DB chunks is disabled for now (saved for v2).
+  let fileContext = "";
+  const MAX_FILE_CHARS = 2500;
+  const citedFileCitations: Array<{ filename: string; chunkIndex: number; contentPreview: string }> = [];
+
+  if (chatFiles && chatFiles.length > 0) {
+    const fileBlocks: string[] = [];
+    let citationIdx = 0;
+
+    for (const file of chatFiles) {
+      if (file.extractedText && file.extractedText.trim()) {
+        const text = file.extractedText.trim();
+        // For short files, use all content. For long files, use semantic selection via embedding.
+        if (text.length <= MAX_FILE_CHARS) {
+          citationIdx++;
+          fileBlocks.push(`[File: ${file.filename}]\n${text}`);
+          citedFileCitations.push({
+            filename: file.filename,
+            chunkIndex: citationIdx,
+            contentPreview: text.slice(0, 280),
+          });
+        } else {
+          // Long file: embed the query and find relevant chunks from DB cache.
+          try {
+            const { embedding: queryEmbedding } = await embed({
+              model: getEmbeddingModel(),
+              value: message,
+            });
+            const relevant = await searchFileChunks(file.fileId, queryEmbedding, 5);
+            citationIdx++;
+            if (relevant.length > 0) {
+              const block = relevant.map((c) => c.content).join("\n\n");
+              fileBlocks.push(`[File: ${file.filename}]\n${block}`);
+              relevant.forEach((c) =>
+                citedFileCitations.push({
+                  filename: file.filename,
+                  chunkIndex: c.index,
+                  contentPreview: c.content.slice(0, 280),
+                }),
+              );
+            } else {
+              // No DB cache or no match — slice from start
+              fileBlocks.push(`[File: ${file.filename}]\n${text.slice(0, MAX_FILE_CHARS)}`);
+              citedFileCitations.push({
+                filename: file.filename,
+                chunkIndex: citationIdx,
+                contentPreview: text.slice(0, 280),
+              });
+            }
+          } catch {
+            // Embedding fails — use start of file
+            citationIdx++;
+            fileBlocks.push(`[File: ${file.filename}]\n${text.slice(0, MAX_FILE_CHARS)}`);
+            citedFileCitations.push({
+              filename: file.filename,
+              chunkIndex: citationIdx,
+              contentPreview: text.slice(0, 280),
+            });
+          }
+        }
+      } else {
+        // No extracted text — AI will read via URL
+        fileBlocks.push(`[File: ${file.filename}]\nURL: ${file.storageUrl}`);
+      }
+    }
+
+    let built = "";
+    for (const block of fileBlocks) {
+      if ((built + block + "\n\n").length > MAX_FILE_CHARS) break;
+      built += block + "\n\n";
+    }
+    fileContext = built.trim();
+  }
+
     // Build prompt content and handle image if present
     let promptContent: UserModelMessage;
 
@@ -305,6 +387,7 @@ export async function POST(req: NextRequest) {
             {
               type: "text" as const,
               text: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
 
 Question:
 ${message}
@@ -321,6 +404,7 @@ ${context}`,
         promptContent = {
           role: "user",
           content: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
 
 Question:
 ${message}
@@ -333,6 +417,7 @@ ${context}`,
       promptContent = {
         role: "user",
         content: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
 
 Question:
 ${message}
@@ -344,40 +429,43 @@ ${context}`,
 
     // Build system prompt based on context availability
     let systemPrompt: string;
+    const hasFiles = chatFiles && chatFiles.length > 0;
+
     if (shouldProcessImage) {
-      if (context) {
-        systemPrompt = `You answer questions using the provided document context and any images provided. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.
+      if (context || fileContext) {
+        systemPrompt = `You answer questions using the provided document context${hasFiles ? ", attached files" : ""} and any images provided. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${hasFiles ? "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1." : ""}
 
 If an image is provided:
 - Analyze the image carefully if it's relevant to the question.
 - If the image appears unrelated to the document, mention: "I notice this image doesn't seem related to the document. I'm happy to help if you have questions about ${document.filename}."`;
       } else {
         // No document context but has image - focus on image analysis
-        systemPrompt = `A user has uploaded an image related to "${document.filename}" but no specific text content was found in the document.
+        systemPrompt = `A user has uploaded an image related to "${document.filename}" but no specific text content was found in the document.${hasFiles ? " They also attached files - read them to answer the question." : ""}
 
 Analyze the image and answer the user's question. Be helpful and concise. If you cannot determine the answer from the image alone, say so.`;
       }
     } else {
-      if (context) {
-        // Check if user sent a random image with their question
+      if (context || fileContext) {
         const hadRandomImage = !!imageUrl;
         if (hadRandomImage) {
-          // Casual Vietnamese response for random images
-          systemPrompt = `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${document.filename}".
-          
+          systemPrompt = `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${document.filename}".${hasFiles ? " Họ cũng attach thêm files." : ""}
+
 Trả lời THÂN THIỆN, TỰ NHIÊN bằng tiếng Việt:
 - Bắt đầu bằng 1 câu châm chích vui về ảnh random (ví dụ: "Ảnh đẹp đấy!", "Bé này dễ thương ghê", ":D")
 - Rồi QUAY VỀ trả lời câu hỏi chính dựa trên context
 - Nói chuyện như đang chat với bạn, KHÔNG formal
 - Đừng nói "dựa trên context" hay "theo như tài liệu" - nói tự nhiên thôi`;
         } else {
-          systemPrompt = `You answer questions using only the provided document context. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.
+          systemPrompt = `You answer questions using the provided document context${hasFiles ? " and attached files" : ""}. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${hasFiles ? "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1." : ""}
 
 Note: If an image was attached but you're not asked to analyze it, just answer the question based on the document. You may briefly note if the image seems completely unrelated to ${document.filename}.`;
         }
+      } else if (hasFiles) {
+        // No document context but has files - answer from files
+        systemPrompt = `The user has attached ${chatFiles!.length} file${chatFiles!.length > 1 ? "s" : ""}: ${chatFiles!.map(f => `"${f.filename}"`).join(", ")}. Read these files carefully and answer the question based on their content. Be helpful and concise. Cite file sources in your answer.${hasFiles ? "\n\nUse citations like [F1.1] for file 1 chunk 1." : ""}`;
       } else {
-        // No context and no image - user asked a general question
-        systemPrompt = `The user is asking about "${document.filename}" but no specific content was found in the document for their question. Answer based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
+        // No context and no image and no files - user asked a general question
+        systemPrompt = `The user is asking about "${document.filename}" but no specific content was found in the document. Answer based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
       }
     }
 
@@ -401,18 +489,19 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
       }
     }
 
-    const dbCitations: CachedCitation[] = citations.map((citation) => ({
+    const docCitations: CachedCitation[] = citations.map((citation) => ({
       filename: document.filename,
       chunkIndex: citation.index,
       contentPreview: citation.snippet,
     }));
+    const dbCitations: CachedCitation[] = [...citedFileCitations, ...docCitations];
 
     let assistantMessageId: string | null = null;
 
     if (sessionId) {
       // Pass all image URLs to saveMessage
       const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
-      const savedUserMessage = await saveMessage(sessionId, "user", message, [], allImageUrls);
+      const savedUserMessage = await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
 
       if (!savedUserMessage) {
         console.error("[chat] Failed to save user message, continuing anyway");

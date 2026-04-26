@@ -27,6 +27,15 @@ export type ChatSession = {
   is_pinned?: boolean;
 };
 
+export type ChatFile = {
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  storageUrl: string;
+  fileSize: number;
+  extractedText?: string | null;
+};
+
 export type Message = {
   id: string;
   session_id: string;
@@ -34,6 +43,7 @@ export type Message = {
   content: string;
   imageUrls?: string[];
   imageUrl?: string | null;
+  chatFiles?: ChatFile[];
   citations: Citation[];
   created_at: string;
 };

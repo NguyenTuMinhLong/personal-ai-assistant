@@ -175,6 +175,7 @@ export async function saveMessage(
   content: string,
   citations: Message["citations"] = [],
   _imageUrls?: string[] | null,
+  _chatFiles?: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number; extractedText?: string | null }> | null,
 ): Promise<Message | null> {
   const supabase = createSupabaseAdminClient();
 
@@ -183,9 +184,14 @@ export async function saveMessage(
     ? JSON.stringify(_imageUrls)
     : null;
 
+  // Store chat files as JSON array
+  const chatFilesValue = _chatFiles && _chatFiles.length > 0
+    ? JSON.stringify(_chatFiles)
+    : null;
+
   const { data, error } = await supabase
     .from("messages")
-    .insert({ session_id: sessionId, role, content, citations, image_url: imageUrlValue })
+    .insert({ session_id: sessionId, role, content, citations, image_url: imageUrlValue, chat_files: chatFilesValue })
     .select()
     .single();
 
@@ -205,6 +211,15 @@ export async function saveMessage(
       imageUrls = [imageUrlRaw];
     }
   }
+  const chatFilesRaw = (data as Record<string, unknown>).chat_files;
+  let chatFiles: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number; extractedText?: string | null }> = [];
+  if (typeof chatFilesRaw === "string" && chatFilesRaw) {
+    try {
+      chatFiles = JSON.parse(chatFilesRaw);
+    } catch {
+      chatFiles = [];
+    }
+  }
   const mapped: Message = {
     id: String(data.id),
     session_id: String(data.session_id),
@@ -212,6 +227,7 @@ export async function saveMessage(
     content: String(data.content ?? ""),
     imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
     imageUrl: imageUrls[0] ?? null,
+    chatFiles: chatFiles.length > 0 ? chatFiles : undefined,
     citations: Array.isArray(data.citations) ? data.citations : [],
     created_at: String(data.created_at ?? ""),
   };
@@ -242,6 +258,15 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
         imageUrls = [imageUrlRaw];
       }
     }
+    const chatFilesRaw = (row as Record<string, unknown>).chat_files;
+    let chatFiles: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number }> = [];
+    if (typeof chatFilesRaw === "string" && chatFilesRaw) {
+      try {
+        chatFiles = JSON.parse(chatFilesRaw);
+      } catch {
+        chatFiles = [];
+      }
+    }
     return {
       id: String(row.id),
       session_id: String(row.session_id),
@@ -249,6 +274,7 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
       content: String(row.content ?? ""),
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
       imageUrl: imageUrls[0] ?? null,
+      chatFiles: chatFiles.length > 0 ? chatFiles : undefined,
       citations: Array.isArray(row.citations) ? row.citations : [],
       created_at: String(row.created_at ?? ""),
     };

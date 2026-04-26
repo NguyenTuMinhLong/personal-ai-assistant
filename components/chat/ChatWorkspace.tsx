@@ -40,11 +40,21 @@ type Citation = {
 
 type HighlightColor = "rose" | "amber" | "emerald" | "sky" | "violet";
 
+type ChatFile = {
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  storageUrl: string;
+  fileSize: number;
+  extractedText?: string | null;
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   imageUrls?: string[];
+  chatFiles?: ChatFile[];
   citations?: Citation[];
   highlightColor?: HighlightColor | null;
   selectionStart?: number | null;
@@ -476,6 +486,24 @@ const MessageBubble = memo(function MessageBubble({
                 ))}
               </div>
             )}
+
+            {/* Attached files */}
+            {message.chatFiles && message.chatFiles.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {message.chatFiles.map((file, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-1.5 rounded-md border border-stone-200 bg-stone-100 px-2 py-1 dark:border-stone-600 dark:bg-stone-700"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+                    <span className="max-w-[160px] truncate text-xs text-stone-600 dark:text-stone-300">
+                      {file.filename}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
               <HighlightedText
                 content={message.content ?? ""}
@@ -605,6 +633,8 @@ export function ChatWorkspace({
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [filePreviews, setFilePreviews] = useState<Array<ChatFile & { uploading?: boolean }>>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -1083,6 +1113,86 @@ export function ChatWorkspace({
     setImagePreviews([]);
   }, [imagePreviews]);
 
+  // ── File handling ─────────────────────────────────────────────
+  const handleFileSelect = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      if (files.length === 0) return;
+
+      const allowed = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+      ];
+      const valid = files.filter((f) => allowed.includes(f.type));
+      const remaining = 3 - filePreviews.length;
+      const toUpload = valid.slice(0, remaining);
+
+      if (toUpload.length === 0) {
+        toast.error("Unsupported file type or limit reached.");
+        e.target.value = "";
+        return;
+      }
+
+      const tempPreviews = toUpload.map((file) => ({
+        fileId: `temp-${Date.now()}-${Math.random()}`,
+        filename: file.name,
+        mimeType: file.type,
+        storageUrl: "",
+        fileSize: file.size,
+        uploading: true,
+      }));
+
+      setFilePreviews((prev) => [...prev, ...tempPreviews].slice(0, 3));
+      setUploadingFile(true);
+
+      try {
+        for (const file of toUpload) {
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/api/chat-files", { method: "POST", body: formData });
+          const data = await res.json();
+
+          setFilePreviews((prev) =>
+            prev.map((fp) =>
+              fp.filename === file.name
+                ? {
+                    ...fp,
+                    fileId: data.fileId ?? fp.fileId,
+                    storageUrl: data.storageUrl ?? fp.storageUrl,
+                    mimeType: data.mimeType ?? fp.mimeType,
+                    fileSize: data.fileSize ?? fp.fileSize,
+                    extractedText: data.extractedText ?? fp.extractedText,
+                    uploading: false,
+                  }
+                : fp,
+            ),
+          );
+        }
+      } catch {
+        toast.error("File upload failed.");
+        setFilePreviews((prev) => prev.filter((fp) => fp.filename !== toUpload[0].name));
+      } finally {
+        setUploadingFile(false);
+      }
+      e.target.value = "";
+    },
+    [filePreviews.length],
+  );
+
+  const removeSelectedFile = useCallback(
+    (index: number) => {
+      setFilePreviews((prev) => prev.filter((_, i) => i !== index));
+    },
+    [],
+  );
+
+  const clearAllFiles = useCallback(() => {
+    setFilePreviews([]);
+  }, []);
+
   // ── Drag and drop ──────────────────────────────────────────────
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -1128,11 +1238,11 @@ export function ChatWorkspace({
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const trimmed = input.trim();
-      if (!trimmed && selectedImages.length === 0) return;
+      if (!trimmed && selectedImages.length === 0 && filePreviews.length === 0) return;
       if (!currentDocumentId) return;
 
       // Upload all images
-      let imageUrls: string[] = [];
+      const imageUrls: string[] = [];
 
       if (selectedImages.length > 0) {
         setUploadingImage(true);
@@ -1162,17 +1272,30 @@ export function ChatWorkspace({
         }
       }
 
+      const uploadedFiles: ChatFile[] = filePreviews
+        .filter((fp) => !fp.uploading && fp.storageUrl)
+        .map((fp) => ({
+          fileId: fp.fileId,
+          filename: fp.filename,
+          mimeType: fp.mimeType,
+          storageUrl: fp.storageUrl,
+          fileSize: fp.fileSize,
+          extractedText: fp.extractedText,
+        }));
+
       const userMessage: ChatMessage = {
         id: createMessageId(),
         role: "user",
         content: trimmed,
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+        chatFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
         createdAt: new Date().toISOString(),
       };
 
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
       clearAllImages();
+      clearAllFiles();
       setSending(true);
       setHighlightPickerMessageId(null);
       setPendingSelection(null);
@@ -1188,6 +1311,7 @@ export function ChatWorkspace({
             documentId: currentDocumentId,
             message: trimmed,
             imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+            chatFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
             sessionId: currentSessionId,
           }),
         });
@@ -1268,8 +1392,10 @@ export function ChatWorkspace({
       currentSessionId,
       selectedImages,
       clearAllImages,
+      clearAllFiles,
       scrollToLatest,
       router,
+      filePreviews,
     ],
   );
 
@@ -1737,6 +1863,37 @@ export function ChatWorkspace({
               </div>
             )}
 
+            {/* File preview */}
+            {filePreviews.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800">
+                {filePreviews.map((fp, idx) => (
+                  <div key={fp.fileId} className="relative group flex items-center gap-1.5 rounded-md border border-stone-200 bg-white px-2 py-1 dark:border-stone-600 dark:bg-stone-700">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+                    <span className="max-w-[120px] truncate text-xs text-stone-600 dark:text-stone-300">
+                      {fp.filename}
+                    </span>
+                    {fp.uploading ? (
+                      <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => removeSelectedFile(idx)}
+                        className="flex h-4 w-4 items-center justify-center rounded text-stone-400 hover:text-red-500"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <span className="text-xs text-stone-500">
+                  {filePreviews.length}/3 files
+                </span>
+                {uploadingFile && (
+                  <span className="text-xs text-stone-400">Processing...</span>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-2">
               {/* Image attachment */}
               <label
@@ -1759,6 +1916,25 @@ export function ChatWorkspace({
                 <ImagePlus className="h-4 w-4" />
               </label>
 
+              {/* File attachment */}
+              <label
+                className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${
+                  !selectedDocument || sending || filePreviews.length >= 3
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
+              >
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf,.docx,.doc,.txt,.md,.csv"
+                  multiple
+                  onChange={handleFileSelect}
+                  disabled={!selectedDocument || sending || filePreviews.length >= 3}
+                  className="hidden"
+                />
+                <FileText className="h-4 w-4" />
+              </label>
+
               {/* Text input */}
               <input
                 data-testid="chat-input"
@@ -1778,9 +1954,11 @@ export function ChatWorkspace({
               <button
                 type="submit"
                 disabled={
-                  (!input.trim() && imagePreviews.length === 0) ||
+                  (!input.trim() && imagePreviews.length === 0 && filePreviews.length === 0) ||
                   !selectedDocument ||
-                  sending
+                  sending ||
+                  uploadingImage ||
+                  uploadingFile
                 }
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white transition-all hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-stone-700 dark:hover:bg-stone-600"
               >
