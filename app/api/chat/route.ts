@@ -41,6 +41,96 @@ function toUICitations(citations: CachedCitation[]) {
   }));
 }
 
+const VIETNAMESE_REGEX = /[ăâđêôơưáàảãạấầẩẫậắằẳẳặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i;
+
+function detectLanguage(text: string): "vi" | "en" {
+  if (VIETNAMESE_REGEX.test(text)) return "vi";
+  return "en";
+}
+
+function buildSystemPrompt(
+  lang: "vi" | "en",
+  options: {
+    shouldProcessImage: boolean;
+    hasContext: boolean;
+    hasFileContext: boolean;
+    hasFiles: boolean;
+    imageUrl?: string;
+    documentFilename: string;
+    chatFileCount?: number;
+    chatFileNames?: string[];
+  },
+): string {
+  const { shouldProcessImage, hasContext, hasFileContext, hasFiles, imageUrl, documentFilename, chatFileCount, chatFileNames } = options;
+  const ctx = hasContext || hasFileContext;
+  const vi = lang === "vi";
+
+  const langLabel = vi ? "tiếng Việt" : "English";
+  const suffix = vi ? "" : "";
+
+  const citeNote = hasFiles
+    ? (vi ? "\n\nVới các file đính kèm, hãy dùng citations kiểu [F1.1] cho file 1 đoạn 1." : "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1.")
+    : "";
+
+  // Random image branch (always Vietnamese-style friendliness)
+  if (imageUrl && !shouldProcessImage) {
+    return `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${documentFilename}".${hasFiles ? " Họ cũng attach thêm files." : ""}
+
+Trả lời THÂN THIỆN, TỰ NHIÊN bằng tiếng Việt:
+- Bắt đầu bằng 1 câu châm chích vui về ảnh random (ví dụ: "Ảnh đẹp đấy!", "Bé này dễ thương ghê", ":D")
+- Rồi QUAY VỀ trả lời câu hỏi chính dựa trên context
+- Nói chuyện như đang chat với bạn, KHÔNG formal
+- Đừng nói "dựa trên context" hay "theo như tài liệu" - nói tự nhiên thôi`;
+  }
+
+  if (shouldProcessImage) {
+    if (ctx) {
+      return vi
+        ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? ", các file đính kèm" : ""} và hình ảnh (nếu có). Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}
+
+Nếu có hình ảnh kèm theo:
+- Phân tích hình ảnh cẩn thận nếu nó liên quan đến câu hỏi.
+- Nếu hình ảnh không liên quan đến tài liệu, hãy nói: "Tôi nhận thấy hình ảnh này có vẻ không liên quan đến tài liệu. Tôi sẵn sàng giúp nếu bạn có câu hỏi về ${documentFilename}."`
+        : `Answer questions in English using the provided document context${hasFiles ? ", attached files" : ""} and any images provided. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${citeNote}
+
+If an image is provided:
+- Analyze the image carefully if it's relevant to the question.
+- If the image appears unrelated to the document, mention: "I notice this image doesn't seem related to the document. I'm happy to help if you have questions about ${documentFilename}."`;
+    } else {
+      return vi
+        ? `Người dùng đã upload một hình ảnh liên quan đến "${documentFilename}" nhưng không tìm thấy nội dung văn bản cụ thể trong tài liệu.${hasFiles ? " Họ cũng đính kèm các file - hãy đọc chúng để trả lời câu hỏi." : ""}
+
+Hãy phân tích hình ảnh và trả lời câu hỏi của người dùng bằng tiếng Việt. Hãy hữu ích và ngắn gọn. Nếu bạn không thể xác định câu trả lời chỉ từ hình ảnh, hãy nói rõ điều đó.`
+        : `A user has uploaded an image related to "${documentFilename}" but no specific text content was found in the document.${hasFiles ? " They also attached files - read them to answer the question." : ""}
+
+Analyze the image and answer the user's question in English. Be helpful and concise. If you cannot determine the answer from the image alone, say so.`;
+    }
+  }
+
+  // No image
+  if (ctx) {
+    return vi
+      ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? " và các file đính kèm" : ""}. Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}
+
+Lưu ý: Nếu có hình ảnh được đính kèm nhưng bạn không được yêu cầu phân tích, chỉ cần trả lời dựa trên tài liệu. Bạn có thể đề cập ngắn gọn nếu hình ảnh có vẻ hoàn toàn không liên quan đến ${documentFilename}.`
+      : `Answer questions in English using the provided document context${hasFiles ? " and attached files" : ""}. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${citeNote}
+
+Note: If an image was attached but you're not asked to analyze it, just answer the question based on the document. You may briefly note if the image seems completely unrelated to ${documentFilename}.`;
+  }
+
+  if (hasFiles) {
+    const fileList = chatFileNames?.map(f => `"${f}"`).join(", ") ?? "";
+    return vi
+      ? `Người dùng đã đính kèm ${chatFileCount} file: ${fileList}. Hãy đọc kỹ các file này và trả lời câu hỏi bằng tiếng Việt dựa trên nội dung của chúng. Hãy hữu ích và ngắn gọn. Trích dẫn nguồn file trong câu trả lời của bạn.${citeNote}`
+      : `The user has attached ${chatFileCount} file${(chatFileCount ?? 0) > 1 ? "s" : ""}: ${fileList}. Read these files carefully and answer the question in English based on their content. Be helpful and concise. Cite file sources in your answer.${citeNote}`;
+  }
+
+  // No context, no image, no files
+  return vi
+    ? `Người dùng đang hỏi về "${documentFilename}" nhưng không tìm thấy nội dung cụ thể trong tài liệu. Hãy trả lời bằng tiếng Việt dựa trên kiến thức của bạn nếu có thể, và lưu ý nếu câu hỏi có vẻ không liên quan đến tài liệu.`
+    : `The user is asking about "${documentFilename}" but no specific content was found in the document. Answer in English based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
+}
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -360,47 +450,21 @@ ${context}`,
       };
     }
 
+    const lang = detectLanguage(message);
+
     // Build system prompt based on context availability
-    let systemPrompt: string;
-    const hasFiles = chatFiles && chatFiles.length > 0;
+    const hasFiles = !!(chatFiles && chatFiles.length > 0);
 
-    if (shouldProcessImage) {
-      if (context || fileContext) {
-        systemPrompt = `You answer questions using the provided document context${hasFiles ? ", attached files" : ""} and any images provided. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${hasFiles ? "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1." : ""}
-
-If an image is provided:
-- Analyze the image carefully if it's relevant to the question.
-- If the image appears unrelated to the document, mention: "I notice this image doesn't seem related to the document. I'm happy to help if you have questions about ${document.filename}."`;
-      } else {
-        // No document context but has image - focus on image analysis
-        systemPrompt = `A user has uploaded an image related to "${document.filename}" but no specific text content was found in the document.${hasFiles ? " They also attached files - read them to answer the question." : ""}
-
-Analyze the image and answer the user's question. Be helpful and concise. If you cannot determine the answer from the image alone, say so.`;
-      }
-    } else {
-      if (context || fileContext) {
-        const hadRandomImage = !!imageUrl;
-        if (hadRandomImage) {
-          systemPrompt = `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${document.filename}".${hasFiles ? " Họ cũng attach thêm files." : ""}
-
-Trả lời THÂN THIỆN, TỰ NHIÊN bằng tiếng Việt:
-- Bắt đầu bằng 1 câu châm chích vui về ảnh random (ví dụ: "Ảnh đẹp đấy!", "Bé này dễ thương ghê", ":D")
-- Rồi QUAY VỀ trả lời câu hỏi chính dựa trên context
-- Nói chuyện như đang chat với bạn, KHÔNG formal
-- Đừng nói "dựa trên context" hay "theo như tài liệu" - nói tự nhiên thôi`;
-        } else {
-          systemPrompt = `You answer questions using the provided document context${hasFiles ? " and attached files" : ""}. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${hasFiles ? "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1." : ""}
-
-Note: If an image was attached but you're not asked to analyze it, just answer the question based on the document. You may briefly note if the image seems completely unrelated to ${document.filename}.`;
-        }
-      } else if (hasFiles) {
-        // No document context but has files - answer from files
-        systemPrompt = `The user has attached ${chatFiles!.length} file${chatFiles!.length > 1 ? "s" : ""}: ${chatFiles!.map(f => `"${f.filename}"`).join(", ")}. Read these files carefully and answer the question based on their content. Be helpful and concise. Cite file sources in your answer.${hasFiles ? "\n\nUse citations like [F1.1] for file 1 chunk 1." : ""}`;
-      } else {
-        // No context and no image and no files - user asked a general question
-        systemPrompt = `The user is asking about "${document.filename}" but no specific content was found in the document. Answer based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
-      }
-    }
+    const systemPrompt = buildSystemPrompt(lang, {
+      shouldProcessImage,
+      hasContext: !!context,
+      hasFileContext: !!fileContext,
+      hasFiles,
+      imageUrl,
+      documentFilename: document.filename,
+      chatFileCount: chatFiles?.length,
+      chatFileNames: chatFiles?.map(f => f.filename),
+    });
 
     const { text } = await generateText({
       model: getChatModel(shouldProcessImage),
@@ -412,7 +476,7 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
     if (imageUrl) {
       if (shouldProcessImage) {
         // Image was processed - cache based on response
-        const isRelated = !text.toLowerCase().includes("doesn't seem related") &&
+        const isRelated = !text.toLowerCase().includes("không liên quan") &&
                           !text.toLowerCase().includes("not related");
         setCachedImageAnalysis(imageUrl, text.slice(0, 200), isRelated);
       } else {

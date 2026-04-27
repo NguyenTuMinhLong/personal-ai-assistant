@@ -14,6 +14,7 @@ import {
   BookmarkPlus,
   Copy,
   Check,
+  Download,
   FileText,
   ImagePlus,
   Loader2,
@@ -493,12 +494,22 @@ const MessageBubble = memo(function MessageBubble({
                 {message.chatFiles.map((file, idx) => (
                   <div
                     key={idx}
-                    className="flex items-center gap-1.5 rounded-md border border-stone-200 bg-stone-100 px-2 py-1 dark:border-stone-600 dark:bg-stone-700"
+                    className="group flex items-center gap-1.5 rounded-md border border-stone-200 bg-stone-100 px-2 py-1 dark:border-stone-600 dark:bg-stone-700"
                   >
                     <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
-                    <span className="max-w-[160px] truncate text-xs text-stone-600 dark:text-stone-300">
+                    <span className="max-w-[120px] truncate text-xs text-stone-600 dark:text-stone-300">
                       {file.filename}
                     </span>
+                    <a
+                      href={file.storageUrl}
+                      download={file.filename}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 rounded p-0.5 text-stone-400 opacity-0 transition-all hover:bg-stone-200 hover:text-stone-600 group-hover:opacity-100 dark:hover:bg-stone-600 dark:hover:text-stone-300"
+                      title="Download file"
+                    >
+                      <Download className="h-3 w-3" />
+                    </a>
                   </div>
                 ))}
               </div>
@@ -1030,6 +1041,13 @@ export function ChatWorkspace({
             content: string;
             image_url?: string | null;
             image_urls?: string[];
+            chat_files?: Array<{
+              fileId: string;
+              filename: string;
+              mimeType: string;
+              storageUrl: string;
+              fileSize: number;
+            }>;
             citations: Array<{
               filename: string;
               chunk_index: number;
@@ -1051,6 +1069,7 @@ export function ChatWorkspace({
               role: msg.role,
               content: msg.content,
               imageUrls: urls.length > 0 ? urls : undefined,
+              chatFiles: msg.chat_files ?? undefined,
               citations: msg.citations?.map((c, i) => ({
                 index: i + 1,
                 snippet: c.content_preview ?? "",
@@ -1068,7 +1087,10 @@ export function ChatWorkspace({
           setNotes(newNotes);
           loadedSessionRef.current = currentSessionId;
 
-          requestAnimationFrame(() => scrollToLatest("auto"));
+          // Double-RAF: first fires before React paints, second fires after
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => scrollToLatest("auto")),
+          );
         },
       )
       .catch((error) => {
@@ -1207,30 +1229,100 @@ export function ChatWorkspace({
   }, []);
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDraggingOver(false);
 
       if (!currentDocumentId || sending) return;
 
-      const files = Array.from(e.dataTransfer.files).filter((file) =>
-        file.type.startsWith("image/"),
-      );
+      const files = Array.from(e.dataTransfer.files);
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
 
-      if (files.length === 0) return;
+      // Handle images
+      if (imageFiles.length > 0) {
+        const newFiles = imageFiles.slice(0, 5 - selectedImages.length);
+        const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
 
-      const newFiles = files.slice(0, 5 - selectedImages.length);
-      const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
+        setSelectedImages((prev) => [...prev, ...newFiles].slice(0, 5));
+        setImagePreviews((prev) => [...prev, ...newPreviews].slice(0, 5));
 
-      setSelectedImages((prev) => [...prev, ...newFiles].slice(0, 5));
-      setImagePreviews((prev) => [...prev, ...newPreviews].slice(0, 5));
+        if (newFiles.length > 0) {
+          toast.success(`Added ${newFiles.length} image${newFiles.length > 1 ? "s" : ""}`);
+        }
+      }
 
-      if (newFiles.length > 0) {
-        toast.success(`Added ${newFiles.length} image${newFiles.length > 1 ? "s" : ""}`);
+      // Handle document files (PDF, DOCX, TXT, MD, CSV)
+      const allowedDocTypes = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+      ];
+      const docFiles = files.filter((file) => allowedDocTypes.includes(file.type));
+
+      if (docFiles.length > 0) {
+        const remaining = 3 - filePreviews.length;
+        const toUpload = docFiles.slice(0, remaining);
+
+        if (toUpload.length === 0) {
+          toast.error("File limit reached (max 3).");
+          return;
+        }
+
+        // Show temp previews
+        const tempPreviews = toUpload.map((file) => ({
+          fileId: `temp-${Date.now()}-${Math.random()}`,
+          filename: file.name,
+          mimeType: file.type,
+          storageUrl: "",
+          fileSize: file.size,
+          uploading: true,
+        }));
+
+        setFilePreviews((prev) => [...prev, ...tempPreviews].slice(0, 3));
+        setUploadingFile(true);
+
+        // Upload files
+        for (let i = 0; i < toUpload.length; i++) {
+          const file = toUpload[i];
+          const tempId = tempPreviews[i].fileId;
+
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            const res = await fetch("/api/chat-files", { method: "POST", body: formData });
+            const data = await res.json();
+
+            if (res.ok && data.fileId) {
+              setFilePreviews((prev) =>
+                prev.map((fp) =>
+                  fp.fileId === tempId
+                    ? {
+                        ...fp,
+                        fileId: data.fileId,
+                        storageUrl: data.storageUrl,
+                        uploading: false,
+                      }
+                    : fp,
+                ),
+              );
+            } else {
+              setFilePreviews((prev) => prev.filter((fp) => fp.fileId !== tempId));
+              toast.error(`Upload failed: ${data.error ?? file.name}`);
+            }
+          } catch {
+            setFilePreviews((prev) => prev.filter((fp) => fp.fileId !== tempId));
+            toast.error(`Upload failed: ${file.name}`);
+          }
+        }
+
+        setUploadingFile(false);
+        toast.success(`Added ${toUpload.length} file${toUpload.length > 1 ? "s" : ""}`);
       }
     },
-    [currentDocumentId, sending, selectedImages.length],
+    [currentDocumentId, sending, selectedImages.length, filePreviews.length],
   );
 
   // ── Submit ────────────────────────────────────────────────────
@@ -1726,8 +1818,8 @@ export function ChatWorkspace({
           {isDraggingOver && (
             <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center rounded-lg bg-stone-100/90 dark:bg-stone-800/90">
               <ImagePlus className="h-12 w-12 text-stone-400" />
-              <p className="mt-2 text-sm font-medium text-stone-500">Drop images here</p>
-              <p className="text-xs text-stone-400">Max 5 images</p>
+              <p className="mt-2 text-sm font-medium text-stone-500">Drop files or images here</p>
+              <p className="text-xs text-stone-400">Max 5 images + 3 files</p>
             </div>
           )}
           {loadingHistory ? (

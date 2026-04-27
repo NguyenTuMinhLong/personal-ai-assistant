@@ -36,6 +36,7 @@ export async function GET(
     content: msg.content,
     image_url: msg.imageUrl ?? null,
     image_urls: msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : []),
+    chat_files: msg.chatFiles ?? undefined,
     citations: msg.citations ?? [],
     created_at: msg.created_at,
   }));
