@@ -35,13 +35,14 @@ function createSupabaseAdminClient() {
   });
 }
 
-// documents table columns: id, filename, content, summary, created_at, user_id
+// documents table columns: id, filename, content, summary, created_at, user_id, deleted_at
 export async function listUserDocuments(userId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
     .select("id, filename, summary")
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -59,6 +60,7 @@ export async function getUserDocument(userId: string, documentId: string) {
     .select("id, filename, content, summary")
     .eq("id", documentId)
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (error) {
@@ -103,20 +105,11 @@ export async function listDocumentEmbeddings(documentId: string) {
 
 export async function deleteUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
-  const { error: embeddingError } = await supabase
-    .from("document_embeddings")
-    .delete()
-    .eq("document_id", documentId);
 
-  if (embeddingError) {
-    throw new Error(
-      embeddingError.message || "Could not delete document embeddings.",
-    );
-  }
-
+  // Soft delete: set deleted_at timestamp
   const { error: documentError } = await supabase
     .from("documents")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", documentId)
     .eq("user_id", userId);
 
@@ -124,19 +117,40 @@ export async function deleteUserDocument(userId: string, documentId: string) {
     throw new Error(documentError.message || "Could not delete document.");
   }
 
+  // Embeddings remain but are inaccessible because the parent document is soft-deleted
+  // and listUserDocuments / getUserDocument filter them out
   invalidateChunkCache(documentId);
 
   return true;
 }
 
-// Soft delete not supported - table has no deletedAt column
-export async function softDeleteDocument(_userId: string, documentId: string) {
-  return deleteUserDocument(_userId, documentId);
+export async function softDeleteDocument(userId: string, documentId: string) {
+  return deleteUserDocument(userId, documentId);
 }
 
-// Restore not supported - no deletedAt column
-export async function restoreDocument(_userId: string, _documentId: string) {
-  throw new Error("Restore not supported for this table schema.");
+export async function restoreDocument(userId: string, documentId: string) {
+  const supabase = createSupabaseAdminClient();
+
+  // Restore document
+  const { error: documentError } = await supabase
+    .from("documents")
+    .update({ deleted_at: null })
+    .eq("id", documentId)
+    .eq("user_id", userId);
+
+  if (documentError) {
+    throw new Error(documentError.message || "Could not restore document.");
+  }
+
+  // Restore embeddings metadata (clear deleted_at)
+  await supabase
+    .from("document_embeddings")
+    .update({ metadata: { chunkType: "fixed" } })
+    .eq("document_id", documentId);
+
+  invalidateChunkCache(documentId);
+
+  return true;
 }
 
 export async function invalidateQACacheForDocument(

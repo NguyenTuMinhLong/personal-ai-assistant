@@ -6,6 +6,7 @@ import { embed } from "ai";
 import { getEmbeddingModel } from "@/lib/ai";
 import { getQACache, getQACacheKey } from "@/lib/cache/in-memory-cache";
 
+// ─── Types ─────────────────────────────────────────────────────
 export type CachedCitation = {
   filename: string;
   chunkIndex: number;
@@ -30,12 +31,14 @@ type RawQACacheRow = Omit<QACacheRow, "citations"> & {
   similarity: number;
 };
 
-// ==================== Configuration ====================
+// ─── Configuration ───────────────────────────────────────────────
 const SEMANTIC_THRESHOLD = 0.78;
 const SEMANTIC_INITIAL_THRESHOLD = 0.70;
 const SEMANTIC_INITIAL_LIMIT = 10;
 const FUZZY_THRESHOLD = 0.80;
+const STALE_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — consider cache stale after this
 
+// ─── Admin client factory ───────────────────────────────────────────
 function createSupabaseAdminClient() {
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseServiceRoleKey) {
@@ -47,6 +50,7 @@ function createSupabaseAdminClient() {
   });
 }
 
+// ─── Citation parser ──────────────────────────────────────────────
 function parseCitations(value: unknown): CachedCitation[] {
   if (!Array.isArray(value)) return [];
 
@@ -71,19 +75,20 @@ function parseCitations(value: unknown): CachedCitation[] {
   });
 }
 
-// ==================== NORMALIZE ====================
+// ─── Normalization ───────────────────────────────────────────────
 const LEADING_FILLERS = [
   "cho mình", "giúp mình", "giup minh", "cho tôi", "cho toi", "giúp tôi", "giup toi",
   "please", "plz", "làm ơn", "lam on", "nhờ bạn", "nho ban", "bạn ơi", "ban oi",
   "bro", "bro ơi", "mày ơi", "anh ơi", "chị ơi", "bạn có thể", "có thể",
   "làm sao", "cho tao", "tao muốn", "mình muốn", "cho anh", "cho chị",
+  "bạn ơi làm ơn", "giúp mình với", "giúp mình nhé",
 ];
 
 const TRAILING_FILLERS = [
   "được không", "duoc khong", "đc không", "dc khong", "đi", "nha", "nhé", "nhe",
   "nhá", "giúp mình nhé", "giup minh nhe", "giúp mình với", "giup minh voi",
   "please", "plz", "thế", "hả", "à", "với", "đi bro", "ko", "không", "đc", "được",
-  "thế nào", "hả bro", "nha bro",
+  "thế nào", "hả bro", "nha bro", "giúp mình đi",
 ];
 
 function stripVietnameseDiacritics(value: string) {
@@ -125,19 +130,19 @@ export function normalizeQuestion(input: string) {
   return normalized;
 }
 
-// ==================== Re-ranking ====================
+// ─── Re-ranking ─────────────────────────────────────────────────
 function rerankByKeywordOverlap(
   query: string,
-  results: RawQACacheRow[]
+  results: RawQACacheRow[],
 ): RawQACacheRow[] {
   const queryWords = new Set(
-    query.toLowerCase().split(/\s+/).filter((w) => w.length > 2)
+    query.toLowerCase().split(/\s+/).filter((w) => w.length > 2),
   );
 
   return results
     .map((item) => {
       const itemWords = new Set(
-        item.normalizedQuestion.toLowerCase().split(/\s+/).filter((w) => w.length > 2)
+        item.normalizedQuestion.toLowerCase().split(/\s+/).filter((w) => w.length > 2),
       );
       const overlap = [...queryWords].filter((w) => itemWords.has(w)).length;
       return { item, overlap };
@@ -145,16 +150,16 @@ function rerankByKeywordOverlap(
     .sort(
       (a, b) =>
         b.overlap - a.overlap ||
-        b.item.similarity - a.item.similarity
+        b.item.similarity - a.item.similarity,
     )
     .map(({ item }) => item);
 }
 
-// ==================== Fuzzy Matching ====================
+// ─── Fuzzy matching ──────────────────────────────────────────────
 async function findFuzzyCachedAnswer(
   userId: string,
   documentId: string,
-  normalizedQuestion: string
+  normalizedQuestion: string,
 ): Promise<QACacheRow | null> {
   const supabase = createSupabaseAdminClient();
 
@@ -170,7 +175,7 @@ async function findFuzzyCachedAnswer(
   const matches = stringSimilarity.findBestMatch(normalizedQuestion, candidates);
 
   if (matches.bestMatch.rating >= FUZZY_THRESHOLD) {
-    const matchedQuestion = candidates[matches.bestMatch.index];
+    const matchedQuestion = candidates[matches.bestMatchIndex];
     return findExactCachedAnswer({
       userId,
       documentId,
@@ -181,123 +186,7 @@ async function findFuzzyCachedAnswer(
   return null;
 }
 
-// ==================== FIND CACHED ====================
-export async function findCachedAnswer(input: {
-  userId: string;
-  documentId: string;
-  question: string;
-  sessionId?: string | null;
-  similarityThreshold?: number;
-}): Promise<QACacheRow | null> {
-  const normalizedQuestion = normalizeQuestion(input.question);
-  const threshold = input.similarityThreshold ?? SEMANTIC_THRESHOLD;
-
-  // 0. Check L1 in-memory cache first
-  const l1Cache = getQACache();
-  const l1CacheKey = getQACacheKey(
-    input.userId,
-    input.documentId,
-    normalizedQuestion,
-    input.sessionId
-  );
-  const l1Cached = l1Cache.get(l1CacheKey);
-
-  if (l1Cached) {
-    if (
-      !input.sessionId ||
-      !l1Cached.sessionId ||
-      l1Cached.sessionId === input.sessionId
-    ) {
-      return {
-        id: "",
-        userId: input.userId,
-        documentId: input.documentId,
-        sessionId: l1Cached.sessionId,
-        question: input.question,
-        normalizedQuestion,
-        answer: l1Cached.answer,
-        citations: l1Cached.citations as CachedCitation[],
-        createdAt: "",
-        updatedAt: "",
-      };
-    }
-  }
-
-  // 1. Exact match
-  const exact = await findExactCachedAnswer({
-    userId: input.userId,
-    documentId: input.documentId,
-    question: input.question,
-    sessionId: input.sessionId,
-  });
-
-  if (exact) {
-    l1Cache.set(l1CacheKey, {
-      answer: exact.answer,
-      citations: exact.citations,
-      sessionId: exact.sessionId,
-    });
-    return exact;
-  }
-
-  // 2. Fuzzy match
-  const fuzzy = await findFuzzyCachedAnswer(
-    input.userId,
-    input.documentId,
-    normalizedQuestion
-  );
-
-  if (fuzzy) {
-    l1Cache.set(l1CacheKey, {
-      answer: fuzzy.answer,
-      citations: fuzzy.citations,
-      sessionId: fuzzy.sessionId,
-    });
-    return fuzzy;
-  }
-
-  // 3. Semantic search (skip if RPC not available)
-  try {
-    const { embedding: questionEmbedding } = await embed({
-      model: getEmbeddingModel(),
-      value: input.question,
-    });
-
-    const supabase = createSupabaseAdminClient();
-    const { data, error } = await supabase.rpc("match_qa_cache", {
-      query_embedding: questionEmbedding,
-      match_threshold: SEMANTIC_INITIAL_THRESHOLD,
-      match_count: SEMANTIC_INITIAL_LIMIT,
-      p_user_id: input.userId,
-      p_document_id: input.documentId,
-    });
-
-    if (error || !data?.length) return null;
-
-    const reranked = rerankByKeywordOverlap(input.question, data as RawQACacheRow[]);
-    const bestMatch = reranked[0];
-
-    if (bestMatch.similarity >= threshold) {
-      const result = {
-        ...bestMatch,
-        citations: parseCitations(bestMatch.citations),
-      };
-
-      l1Cache.set(l1CacheKey, {
-        answer: result.answer,
-        citations: result.citations,
-        sessionId: result.sessionId,
-      });
-
-      return result;
-    }
-  } catch {
-    // RPC not available, skip semantic search
-  }
-
-  return null;
-}
-
+// ─── Exact match ─────────────────────────────────────────────────
 export async function findExactCachedAnswer(input: {
   userId: string;
   documentId: string;
@@ -322,12 +211,16 @@ export async function findExactCachedAnswer(input: {
 
   if (error) {
     console.error("[findExactCachedAnswer]", error.code, error.message);
-    return null; // Don't throw, just return null
+    return null;
   }
   if (!data) return null;
 
-  // Map snake_case DB columns to camelCase types
   const raw = data as Record<string, unknown>;
+
+  // Check if cache entry is stale
+  const updatedAt = new Date(raw.updated_at as string).getTime();
+  const isStale = Date.now() - updatedAt > STALE_AGE_MS;
+
   return {
     id: raw.id as string,
     userId: raw.user_id as string,
@@ -339,10 +232,146 @@ export async function findExactCachedAnswer(input: {
     citations: parseCitations(raw.citations),
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
-  };
+    isStale,
+  } as QACacheRow & { isStale?: boolean };
 }
 
-// ==================== UPSERT ====================
+// ─── Semantic search ─────────────────────────────────────────────
+async function findSemanticCachedAnswer(
+  userId: string,
+  documentId: string,
+  question: string,
+  threshold: number,
+): Promise<QACacheRow | null> {
+  try {
+    const { embedding: questionEmbedding } = await embed({
+      model: getEmbeddingModel(),
+      value: question,
+    });
+
+    const supabase = createSupabaseAdminClient();
+    const { data, error } = await supabase.rpc("match_qa_cache", {
+      query_embedding: questionEmbedding,
+      match_threshold: SEMANTIC_INITIAL_THRESHOLD,
+      match_count: SEMANTIC_INITIAL_LIMIT,
+      p_user_id: userId,
+      p_document_id: documentId,
+    });
+
+    if (error || !data?.length) return null;
+
+    const reranked = rerankByKeywordOverlap(question, data as RawQACacheRow[]);
+    const bestMatch = reranked[0];
+
+    if (bestMatch.similarity >= threshold) {
+      return {
+        ...bestMatch,
+        citations: parseCitations(bestMatch.citations),
+      };
+    }
+  } catch {
+    // RPC not available, skip semantic search
+  }
+
+  return null;
+}
+
+// ─── Main find cached answer ──────────────────────────────────────
+export async function findCachedAnswer(input: {
+  userId: string;
+  documentId: string;
+  question: string;
+  sessionId?: string | null;
+  similarityThreshold?: number;
+}): Promise<QACacheRow | null> {
+  const normalizedQuestion = normalizeQuestion(input.question);
+  const threshold = input.similarityThreshold ?? SEMANTIC_THRESHOLD;
+
+  // L1: in-memory cache
+  const l1Cache = getQACache();
+  const l1CacheKey = getQACacheKey(
+    input.userId,
+    input.documentId,
+    normalizedQuestion,
+    input.sessionId,
+  );
+  const l1Cached = l1Cache.get(l1CacheKey);
+
+  if (l1Cached) {
+    if (
+      !input.sessionId ||
+      !l1Cached.sessionId ||
+      l1Cached.sessionId === input.sessionId
+    ) {
+      return {
+        id: "",
+        userId: input.userId,
+        documentId: input.documentId,
+        sessionId: l1Cached.sessionId,
+        question: input.question,
+        normalizedQuestion,
+        answer: l1Cached.answer,
+        citations: l1Cached.citations as CachedCitation[],
+        createdAt: "",
+        updatedAt: "",
+      };
+    }
+  }
+
+  // L2: exact match in DB
+  const exact = await findExactCachedAnswer({
+    userId: input.userId,
+    documentId: input.documentId,
+    question: input.question,
+    sessionId: input.sessionId,
+  });
+
+  if (exact) {
+    l1Cache.set(l1CacheKey, {
+      answer: exact.answer,
+      citations: exact.citations,
+      sessionId: exact.sessionId,
+    });
+    return exact;
+  }
+
+  // L3: fuzzy match
+  const fuzzy = await findFuzzyCachedAnswer(
+    input.userId,
+    input.documentId,
+    normalizedQuestion,
+  );
+
+  if (fuzzy) {
+    l1Cache.set(l1CacheKey, {
+      answer: fuzzy.answer,
+      citations: fuzzy.citations,
+      sessionId: fuzzy.sessionId,
+    });
+    return fuzzy;
+  }
+
+  // L4: semantic search
+  const semantic = await findSemanticCachedAnswer(
+    input.userId,
+    input.documentId,
+    input.question,
+    threshold,
+  );
+
+  if (semantic) {
+    l1Cache.set(l1CacheKey, {
+      answer: semantic.answer,
+      citations: semantic.citations,
+      sessionId: semantic.sessionId,
+    });
+    return semantic;
+  }
+
+  return null;
+}
+
+// ─── Upsert ─────────────────────────────────────────────────────
 export async function upsertCachedAnswer(input: {
   userId: string;
   documentId: string;
@@ -354,7 +383,6 @@ export async function upsertCachedAnswer(input: {
   const supabase = createSupabaseAdminClient();
   const normalizedQuestion = normalizeQuestion(input.question);
 
-  // Generate embedding
   let embedding: number[] = [];
   try {
     const result = await embed({
@@ -380,7 +408,7 @@ export async function upsertCachedAnswer(input: {
         question_embedding: embedding,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: "user_id,document_id,normalized_question" }
+      { onConflict: "user_id,document_id,normalized_question" },
     )
     .select()
     .single();
@@ -390,7 +418,6 @@ export async function upsertCachedAnswer(input: {
     return null;
   }
 
-  // Map snake_case DB columns to camelCase types
   const raw = data as Record<string, unknown>;
   return {
     id: raw.id as string,
@@ -404,4 +431,59 @@ export async function upsertCachedAnswer(input: {
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
+}
+
+// ─── Cache management ────────────────────────────────────────────
+export async function invalidateUserCache(
+  userId: string,
+  documentId?: string,
+): Promise<number> {
+  const supabase = createSupabaseAdminClient();
+
+  let query = supabase
+    .from("qa_cache")
+    .delete()
+    .eq("user_id", userId);
+
+  if (documentId) {
+    query = query.eq("document_id", documentId);
+  }
+
+  const { error } = await query;
+
+  if (error) {
+    console.error("[invalidateUserCache]", error.code, error.message);
+    return 0;
+  }
+
+  return 1;
+}
+
+export async function pruneStaleCache(userId: string): Promise<number> {
+  const supabase = createSupabaseAdminClient();
+  const staleThreshold = new Date(Date.now() - STALE_AGE_MS).toISOString();
+
+  const { data, error } = await supabase
+    .from("qa_cache")
+    .select("id")
+    .eq("user_id", userId)
+    .lt("updated_at", staleThreshold)
+    .limit(500);
+
+  if (error || !data?.length) return 0;
+
+  const ids = data.map((r) => r.id);
+
+  const { error: deleteError } = await supabase
+    .from("qa_cache")
+    .delete()
+    .in("id", ids)
+    .eq("user_id", userId);
+
+  if (deleteError) {
+    console.error("[pruneStaleCache]", deleteError.code, deleteError.message);
+    return 0;
+  }
+
+  return ids.length;
 }

@@ -25,27 +25,61 @@ import {
   searchFileChunks,
 } from "@/lib/file-cache";
 
+// ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
   documentId?: string;
   message?: string;
   imageUrl?: string;
   imageUrls?: string[];
-  chatFiles?: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number; extractedText?: string | null }>;
+  chatFiles?: Array<{
+    fileId: string;
+    filename: string;
+    mimeType: string;
+    storageUrl: string;
+    fileSize: number;
+    extractedText?: string | null;
+  }>;
   sessionId?: string;
 };
+
+// ─── Config ────────────────────────────────────────────────────
+const MAX_MESSAGE_LENGTH = 2000;
+const MAX_IMAGES = 5;
+const MAX_FILES = 3;
+const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
+// ─── Constants ──────────────────────────────────────────────────
+const VIETNAMESE_REGEX = /[ăâđêôơưáàảãạấầẩẫậắằẳẳặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i;
+
+// ─── Helpers ───────────────────────────────────────────────────
+function generateRequestId(): string {
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function toUICitations(citations: CachedCitation[]) {
   return citations.map((citation, index) => ({
     index: index + 1,
     snippet: citation.contentPreview,
+    filename: citation.filename,
+    chunkIndex: citation.chunkIndex,
   }));
 }
-
-const VIETNAMESE_REGEX = /[ăâđêôơưáàảãạấầẩẫậắằẳẳặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i;
 
 function detectLanguage(text: string): "vi" | "en" {
   if (VIETNAMESE_REGEX.test(text)) return "vi";
   return "en";
+}
+
+function validateFileSize(size: number, maxBytes: number, label: string): string | null {
+  if (size === 0) return `${label} is empty.`;
+  if (size > maxBytes) return `${label} exceeds maximum size of ${Math.round(maxBytes / 1024 / 1024)}MB.`;
+  if (size < 1000) return `${label} appears corrupted or invalid.`;
+  return null;
+}
+
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
 }
 
 function buildSystemPrompt(
@@ -65,14 +99,10 @@ function buildSystemPrompt(
   const ctx = hasContext || hasFileContext;
   const vi = lang === "vi";
 
-  const langLabel = vi ? "tiếng Việt" : "English";
-  const suffix = vi ? "" : "";
-
   const citeNote = hasFiles
     ? (vi ? "\n\nVới các file đính kèm, hãy dùng citations kiểu [F1.1] cho file 1 đoạn 1." : "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1.")
     : "";
 
-  // Random image branch (always Vietnamese-style friendliness)
   if (imageUrl && !shouldProcessImage) {
     return `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${documentFilename}".${hasFiles ? " Họ cũng attach thêm files." : ""}
 
@@ -107,7 +137,6 @@ Analyze the image and answer the user's question in English. Be helpful and conc
     }
   }
 
-  // No image
   if (ctx) {
     return vi
       ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? " và các file đính kèm" : ""}. Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}
@@ -125,20 +154,37 @@ Note: If an image was attached but you're not asked to analyze it, just answer t
       : `The user has attached ${chatFileCount} file${(chatFileCount ?? 0) > 1 ? "s" : ""}: ${fileList}. Read these files carefully and answer the question in English based on their content. Be helpful and concise. Cite file sources in your answer.${citeNote}`;
   }
 
-  // No context, no image, no files
   return vi
     ? `Người dùng đang hỏi về "${documentFilename}" nhưng không tìm thấy nội dung cụ thể trong tài liệu. Hãy trả lời bằng tiếng Việt dựa trên kiến thức của bạn nếu có thể, và lưu ý nếu câu hỏi có vẻ không liên quan đến tài liệu.`
     : `The user is asking about "${documentFilename}" but no specific content was found in the document. Answer in English based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
 }
 
+function isDuplicateQuestion(
+  cached: { answer: string; cachedAt: number },
+  answer: string,
+  timeWindowMs = 30_000,
+): boolean {
+  return (
+    cached.answer.trim() === answer.trim() &&
+    Date.now() - cached.cachedAt < timeWindowMs
+  );
+}
+
+// ─── Route exports ─────────────────────────────────────────────
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const requestId = generateRequestId();
+  const startTime = Date.now();
+
   const user = await currentUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized", requestId },
+      { status: 401 },
+    );
   }
 
   let body: RequestBody;
@@ -147,178 +193,218 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as RequestBody;
   } catch {
     return NextResponse.json(
-      { error: "Invalid request body." },
+      { error: "Invalid request body. Expected JSON.", requestId },
       { status: 400 },
     );
   }
 
-  const message = body.message?.trim();
+  const message = body.message?.trim() ?? "";
   const imageUrl = body.imageUrl?.trim() || undefined;
-  const imageUrls = body.imageUrls?.filter((u: string) => u.trim()) || undefined;
+  const imageUrls = body.imageUrls?.filter(Boolean).map(u => u.trim()) || undefined;
   const chatFiles = body.chatFiles || undefined;
   const documentId = body.documentId?.trim();
   const incomingSessionId = body.sessionId?.trim();
 
+  // ── Input validation ──────────────────────────────────────────
   if (!documentId) {
     return NextResponse.json(
-      { error: "Choose a document first." },
+      { error: "Choose a document first.", requestId },
       { status: 400 },
     );
   }
 
   if (!message) {
     return NextResponse.json(
-      { error: "Ask a question first." },
+      { error: "Ask a question first.", requestId },
       { status: 400 },
     );
   }
 
-  // Note: Images are stored but processed separately for display
-  // AI vision processing can be added back once storage is verified
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    return NextResponse.json(
+      {
+        error: `Message too long. Maximum ${MAX_MESSAGE_LENGTH} characters. You used ${message.length}.`,
+        requestId,
+      },
+      { status: 400 },
+    );
+  }
+
+  if (message.length < 2) {
+    return NextResponse.json(
+      { error: "Message too short. Please ask a meaningful question.", requestId },
+      { status: 400 },
+    );
+  }
+
+  // Validate attached files
+  if (chatFiles && chatFiles.length > MAX_FILES) {
+    return NextResponse.json(
+      { error: `Maximum ${MAX_FILES} files allowed.`, requestId },
+      { status: 400 },
+    );
+  }
+
+  for (const file of chatFiles ?? []) {
+    const sizeErr = validateFileSize(file.fileSize, MAX_FILE_SIZE_BYTES, `File "${file.filename}"`);
+    if (sizeErr) {
+      return NextResponse.json({ error: sizeErr, requestId }, { status: 400 });
+    }
+  }
 
   const document = await getUserDocument(user.id, documentId);
 
   if (!document) {
-    return NextResponse.json({ error: "Document not found." }, { status: 404 });
+    return NextResponse.json(
+      { error: "Document not found.", requestId },
+      { status: 404 },
+    );
   }
 
-  try {
-    let sessionId = incomingSessionId ?? null;
+  // ── Session management ────────────────────────────────────────
+  let sessionId = incomingSessionId ?? null;
 
-    // If sessionId provided, validate it exists and belongs to user for this document
+  if (sessionId) {
+    const existing = await getChatSession(user.id, sessionId);
+
+    if (!existing || existing.document_id !== documentId) {
+      sessionId = null;
+    }
+  }
+
+  if (!sessionId) {
+    const title = message.slice(0, 60);
+    const session = await createChatSession(user.id, documentId, title);
+
+    if (!session?.id) {
+      return NextResponse.json(
+        { error: "Failed to create chat session. Please try again.", requestId },
+        { status: 500 },
+      );
+    }
+
+    sessionId = session.id;
+  }
+
+  // ── Cache lookup ──────────────────────────────────────────────
+  const cached = await findCachedAnswer({
+    userId: user.id,
+    documentId,
+    question: message,
+    sessionId,
+  });
+
+  if (cached) {
+    let assistantMessageId: string | null = null;
+
     if (sessionId) {
-      const existing = await getChatSession(user.id, sessionId);
-      
-      // Session not found or doesn't belong to this user -> create new session
-      if (!existing) {
-        sessionId = null;
-      } 
-      // Session exists but for a different document -> create new session
-      else if (existing.document_id !== documentId) {
-        sessionId = null;
-      }
-    }
+      const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
+      await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
 
-    // Create new session only if needed
-    if (!sessionId) {
-      const title = message.slice(0, 60);
-      const session = await createChatSession(user.id, documentId, title);
-      
-      if (!session?.id) {
-        return NextResponse.json(
-          { error: "Failed to create chat session. Please try again." },
-          { status: 500 },
-        );
-      }
-      
-      sessionId = session.id;
-    }
-
-    const cached = await findCachedAnswer({
-      userId: user.id,
-      documentId,
-      question: message,
-      sessionId: sessionId
-    });
-
-    if (cached) {
-      let assistantMessageId: string | null = null;
-
-      if (sessionId) {
-        const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
-        await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
-
-        const savedAssistantMessage = await saveMessage(
-          sessionId,
-          "assistant",
-          cached.answer,
-          cached.citations,
-        );
-
-        await touchChatSession(sessionId);
-        assistantMessageId = savedAssistantMessage?.id ?? null;
-      }
-
-      return NextResponse.json({
-        answer: cached.answer,
-        citations: toUICitations(cached.citations),
+      const savedAssistantMessage = await saveMessage(
         sessionId,
-        assistantMessageId,
-        reused: true,
-        document: {
-          id: document.id,
-          filename: document.filename,
-        },
-      });
+        "assistant",
+        cached.answer,
+        cached.citations,
+      );
+
+      await touchChatSession(sessionId);
+      assistantMessageId = savedAssistantMessage?.id ?? null;
     }
 
-    // Context size limits to save tokens
-    const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS ?? "", 10) || 3000;
-    const MAX_CONTEXT_CHARS_WITH_IMAGE = parseInt(process.env.MAX_CONTEXT_CHARS_WITH_IMAGE ?? "", 10) || 2000;
-    const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? "", 10) || 8;
+    const elapsedMs = Date.now() - startTime;
 
-    let citations: Array<{ index: number; snippet: string }> = [];
-    let context = "";
+    return NextResponse.json({
+      answer: cached.answer,
+      citations: toUICitations(cached.citations),
+      sessionId,
+      assistantMessageId,
+      reused: true,
+      cacheHit: true,
+      document: {
+        id: document.id,
+        filename: document.filename,
+      },
+      requestId,
+      meta: {
+        elapsedMs,
+        contextUsed: false,
+        imageProcessed: false,
+      },
+    }, {
+      headers: {
+        "X-Request-Id": requestId,
+        "X-Cache-Hit": "true",
+        "X-Response-Time": String(elapsedMs),
+      },
+    });
+  }
 
-    // Smart image handling - check cache and pre-filter
-    let shouldProcessImage = !!imageUrl;
+  // ── Context size limits ───────────────────────────────────────
+  const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS ?? "", 10) || 3000;
+  const MAX_CONTEXT_CHARS_WITH_IMAGE = parseInt(process.env.MAX_CONTEXT_CHARS_WITH_IMAGE ?? "", 10) || 2000;
+  const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? "", 10) || 8;
 
-    if (imageUrl) {
-      // Check if image was previously analyzed
-      const cached = getCachedImageAnalysis(imageUrl);
+  // ── Smart image handling ─────────────────────────────────────
+  let shouldProcessImage = !!imageUrl;
 
-      if (cached && !cached.isRelated) {
-        console.log("Image cached as unrelated, skipping AI vision");
+  if (imageUrl) {
+    const cached = getCachedImageAnalysis(imageUrl);
+
+    if (cached && !cached.isRelated) {
+      console.log(`[${requestId}] Image cached as unrelated, skipping AI vision`);
+      shouldProcessImage = false;
+    } else if (cached && cached.isRelated) {
+      console.log(`[${requestId}] Image cached as related:`, cached.description.slice(0, 50));
+    } else {
+      const questionLower = (message ?? "").toLowerCase();
+      const imageKeywords = ["image", "picture", "photo", "screenshot", "this", "what is", "show", "see", "look", "ảnh", "hình"];
+      const seemsAskingAboutImage = imageKeywords.some(k => questionLower.includes(k));
+      if (!seemsAskingAboutImage) {
+        console.log(`[${requestId}] User not asking about image, skipping AI vision`);
         shouldProcessImage = false;
-      } else if (cached && cached.isRelated) {
-        console.log("Image cached as related:", cached.description.slice(0, 50));
-      } else {
-        const questionLower = (message ?? "").toLowerCase();
-        const imageKeywords = ["image", "picture", "photo", "screenshot", "this", "what is", "show", "see", "look"];
-        const seemsAskingAboutImage = imageKeywords.some(k => questionLower.includes(k));
-        if (!seemsAskingAboutImage) {
-          console.log("User not asking about image, skipping AI vision");
-          shouldProcessImage = false;
-        }
       }
     }
+  }
 
-    // Get query embedding
-    const { embedding: queryEmbedding } = await embed({
-      model: getEmbeddingModel(),
-      value: message,
+  // ── RAG: hybrid search ───────────────────────────────────────
+  const { embedding: queryEmbedding } = await embed({
+    model: getEmbeddingModel(),
+    value: message,
+  });
+
+  const topChunks = await hybridSearch({
+    query: message,
+    queryEmbedding,
+    documentId,
+    topK: RAG_TOP_K,
+  });
+
+  let citations: CachedCitation[] = [];
+  let context = "";
+
+  if (topChunks.length > 0) {
+    const { context: builtContext, citations: builtCitations } = buildContext(topChunks, {
+      maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
+      includeMetadata: true,
+      compressMode: "smart_truncate",
     });
 
-    // Hybrid search: BM25 + vector similarity with RRF fusion
-    const topChunks = await hybridSearch({
-      query: message,
-      queryEmbedding,
-      documentId,
-      topK: RAG_TOP_K,
-    });
+    context = builtContext;
+    citations = builtCitations.map((c, idx) => ({
+      index: idx + 1,
+      snippet: c.snippet,
+      filename: document.filename,
+      chunkIndex: idx + 1,
+      contentPreview: c.snippet,
+    }));
+  }
 
-    if (topChunks.length > 0) {
-      const { context: builtContext, citations: builtCitations } = buildContext(topChunks, {
-        maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
-        includeMetadata: true,
-        compressMode: "smart_truncate",
-      });
-
-      context = builtContext;
-      citations = builtCitations.map((c, idx) => ({
-        index: idx + 1,
-        snippet: c.snippet,
-      }));
-    } else {
-      context = "";
-    }
-
-  // ── Build file context from attached files ───────────────────
-  // extractedText is already provided from the upload response.
-  // Semantic search on DB chunks is disabled for now (saved for v2).
-  let fileContext = "";
+  // ── File context ──────────────────────────────────────────────
   const MAX_FILE_CHARS = 2500;
   const citedFileCitations: Array<{ filename: string; chunkIndex: number; contentPreview: string }> = [];
+
+  let fileContext = "";
 
   if (chatFiles && chatFiles.length > 0) {
     const fileBlocks: string[] = [];
@@ -327,27 +413,27 @@ export async function POST(req: NextRequest) {
     for (const file of chatFiles) {
       if (file.extractedText && file.extractedText.trim()) {
         const text = file.extractedText.trim();
-        // For short files, use all content. For long files, use semantic selection via embedding.
+
         if (text.length <= MAX_FILE_CHARS) {
           citationIdx++;
-          fileBlocks.push(`[File: ${file.filename}]\n${text}`);
+          fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${text}`);
           citedFileCitations.push({
             filename: file.filename,
             chunkIndex: citationIdx,
             contentPreview: text.slice(0, 280),
           });
         } else {
-          // Long file: embed the query and find relevant chunks from DB cache.
           try {
-            const { embedding: queryEmbedding } = await embed({
+            const { embedding: fileQueryEmbedding } = await embed({
               model: getEmbeddingModel(),
               value: message,
             });
-            const relevant = await searchFileChunks(file.fileId, queryEmbedding, 5);
+            const relevant = await searchFileChunks(file.fileId, fileQueryEmbedding, 5);
             citationIdx++;
+
             if (relevant.length > 0) {
               const block = relevant.map((c) => c.content).join("\n\n");
-              fileBlocks.push(`[File: ${file.filename}]\n${block}`);
+              fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${block}`);
               relevant.forEach((c) =>
                 citedFileCitations.push({
                   filename: file.filename,
@@ -356,8 +442,7 @@ export async function POST(req: NextRequest) {
                 }),
               );
             } else {
-              // No DB cache or no match — slice from start
-              fileBlocks.push(`[File: ${file.filename}]\n${text.slice(0, MAX_FILE_CHARS)}`);
+              fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${text.slice(0, MAX_FILE_CHARS)}`);
               citedFileCitations.push({
                 filename: file.filename,
                 chunkIndex: citationIdx,
@@ -365,9 +450,8 @@ export async function POST(req: NextRequest) {
               });
             }
           } catch {
-            // Embedding fails — use start of file
             citationIdx++;
-            fileBlocks.push(`[File: ${file.filename}]\n${text.slice(0, MAX_FILE_CHARS)}`);
+            fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${text.slice(0, MAX_FILE_CHARS)}`);
             citedFileCitations.push({
               filename: file.filename,
               chunkIndex: citationIdx,
@@ -376,8 +460,7 @@ export async function POST(req: NextRequest) {
           }
         }
       } else {
-        // No extracted text — AI will read via URL
-        fileBlocks.push(`[File: ${file.filename}]\nURL: ${file.storageUrl}`);
+        fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\nURL: ${file.storageUrl}`);
       }
     }
 
@@ -389,54 +472,40 @@ export async function POST(req: NextRequest) {
     fileContext = built.trim();
   }
 
-    // Build prompt content and handle image if present
-    let promptContent: UserModelMessage;
+  // ── Build prompt ──────────────────────────────────────────────
+  let promptContent: UserModelMessage;
 
-    if (shouldProcessImage && imageUrl) {
-      // Convert image to base64 for AI vision
-      try {
-        const imageRes = await fetch(imageUrl);
-        if (!imageRes.ok) {
-          throw new Error(`Failed to fetch image: ${imageRes.status}`);
-        }
-        const imageBuffer = await imageRes.arrayBuffer();
-        const base64 = Buffer.from(imageBuffer).toString("base64");
-        const mimeType = imageRes.headers.get("content-type") || "image/jpeg";
-        const dataUrl = `data:${mimeType};base64,${base64}`;
-
-        promptContent = {
-          role: "user",
-          content: [
-            {
-              type: "text" as const,
-              text: `Document name: ${document.filename}
-${fileContext ? `\nAttached files:\n${fileContext}` : ""}
-
-Question:
-${message}
-
-Context:
-${context}`,
-            },
-            { type: "image" as const, image: dataUrl },
-          ],
-        };
-      } catch (fetchError) {
-        console.warn("Failed to fetch image for AI vision, proceeding without image:", fetchError);
-        shouldProcessImage = false;
-        promptContent = {
-          role: "user",
-          content: `Document name: ${document.filename}
-${fileContext ? `\nAttached files:\n${fileContext}` : ""}
-
-Question:
-${message}
-
-Context:
-${context}`,
-        };
+  if (shouldProcessImage && imageUrl) {
+    try {
+      const imageRes = await fetch(imageUrl);
+      if (!imageRes.ok) {
+        throw new Error(`Failed to fetch image: ${imageRes.status}`);
       }
-    } else {
+      const imageBuffer = await imageRes.arrayBuffer();
+      const base64 = Buffer.from(imageBuffer).toString("base64");
+      const mimeType = imageRes.headers.get("content-type") || "image/jpeg";
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+
+      promptContent = {
+        role: "user",
+        content: [
+          {
+            type: "text" as const,
+            text: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
+
+Question:
+${message}
+
+Context:
+${context}`,
+          },
+          { type: "image" as const, image: dataUrl },
+        ],
+      };
+    } catch (fetchError) {
+      console.warn(`[${requestId}] Failed to fetch image for AI vision, proceeding without image:`, fetchError);
+      shouldProcessImage = false;
       promptContent = {
         role: "user",
         content: `Document name: ${document.filename}
@@ -449,141 +518,165 @@ Context:
 ${context}`,
       };
     }
+  } else {
+    promptContent = {
+      role: "user",
+      content: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
 
-    const lang = detectLanguage(message);
+Question:
+${message}
 
-    // Build system prompt based on context availability
-    const hasFiles = !!(chatFiles && chatFiles.length > 0);
+Context:
+${context}`,
+    };
+  }
 
-    const systemPrompt = buildSystemPrompt(lang, {
-      shouldProcessImage,
-      hasContext: !!context,
-      hasFileContext: !!fileContext,
-      hasFiles,
-      imageUrl,
-      documentFilename: document.filename,
-      chatFileCount: chatFiles?.length,
-      chatFileNames: chatFiles?.map(f => f.filename),
-    });
+  const lang = detectLanguage(message);
+  const hasFiles = !!(chatFiles && chatFiles.length > 0);
 
-    const { text } = await generateText({
+  const systemPrompt = buildSystemPrompt(lang, {
+    shouldProcessImage,
+    hasContext: !!context,
+    hasFileContext: !!fileContext,
+    hasFiles,
+    imageUrl,
+    documentFilename: document.filename,
+    chatFileCount: chatFiles?.length,
+    chatFileNames: chatFiles?.map(f => f.filename),
+  });
+
+  // ── AI generation ────────────────────────────────────────────
+  let text: string;
+
+  try {
+    const result = await generateText({
       model: getChatModel(shouldProcessImage),
       system: systemPrompt,
       messages: [promptContent],
     });
 
-    // Cache image analysis for future deduplication
-    if (imageUrl) {
-      if (shouldProcessImage) {
-        // Image was processed - cache based on response
-        const isRelated = !text.toLowerCase().includes("không liên quan") &&
-                          !text.toLowerCase().includes("not related");
-        setCachedImageAnalysis(imageUrl, text.slice(0, 200), isRelated);
-      } else {
-        // Image was skipped (random) - cache as unrelated
-        console.log("Caching random image as unrelated");
-        setCachedImageAnalysis(imageUrl, "random image", false);
-      }
-    }
-
-    const docCitations: CachedCitation[] = citations.map((citation) => ({
-      filename: document.filename,
-      chunkIndex: citation.index,
-      contentPreview: citation.snippet,
-    }));
-    const dbCitations: CachedCitation[] = [...citedFileCitations, ...docCitations];
-
-    let assistantMessageId: string | null = null;
-
-    if (sessionId) {
-      // Pass all image URLs to saveMessage
-      const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
-      const savedUserMessage = await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
-
-      if (!savedUserMessage) {
-        console.error("[chat] Failed to save user message, continuing anyway");
-      }
-
-      const savedAssistantMessage = await saveMessage(
-        sessionId,
-        "assistant",
-        text,
-        dbCitations,
-      );
-
-      if (!savedAssistantMessage) {
-        console.error("[chat] Failed to save assistant message");
-      }
-
-      await touchChatSession(sessionId);
-
-      assistantMessageId = savedAssistantMessage?.id ?? null;
-    }
-
-    await upsertCachedAnswer({
-      userId: user.id,
-      documentId,
-      sessionId,
-      question: message,
-      answer: text,
-      citations: dbCitations,
-    });
-
-    return NextResponse.json({
-      answer: text,
-      citations,
-      sessionId,
-      assistantMessageId,
-      reused: false,
-      document: {
-        id: document.id,
-        filename: document.filename,
-      },
-    });
+    text = result.text;
   } catch (error) {
-    console.error("Chat API Error:", error);
+    console.error(`[${requestId}] AI generation error:`, error);
 
-    // Log more details for debugging
     if (error instanceof Error) {
-      console.error("Error name:", error.name);
-      console.error("Error message:", error.message);
-      console.error("Error stack:", error.stack);
+      const msg = error.message.toLowerCase();
 
-      // Check for specific error types
-      if (error.message.includes("rate limit") || error.message.includes("quota")) {
+      if (msg.includes("rate limit") || msg.includes("quota") || msg.includes("429")) {
         return NextResponse.json(
-          { error: "AI rate limit reached. Please wait a moment and try again." },
-          { status: 429 }
+          { error: "AI rate limit reached. Please wait a moment and try again.", requestId },
+          { status: 429 },
         );
       }
-      if (error.message.includes("Invalid JSON") || error.message.includes("invalid response")) {
+      if (msg.includes("invalid json") || msg.includes("invalid response") || msg.includes("parse")) {
         return NextResponse.json(
-          { error: "AI returned an invalid response. Please try again." },
-          { status: 502 }
+          { error: "AI returned an invalid response. Please try again.", requestId },
+          { status: 502 },
         );
       }
-      if (error.message.includes("fetch") || error.message.includes("network")) {
+      if (msg.includes("fetch") || msg.includes("network") || msg.includes("econnreset")) {
         return NextResponse.json(
-          { error: "Network error. Please check your connection and try again." },
-          { status: 503 }
+          { error: "Network error connecting to AI service. Please check your connection and try again.", requestId },
+          { status: 503 },
         );
       }
-    }
-
-    // Generic AI SDK error check
-    if (error && typeof error === "object" && "message" in error) {
-      const errorObj = error as { message?: string; cause?: unknown };
-      if (errorObj.message?.includes("Invalid JSON")) {
+      if (msg.includes("context_length") || msg.includes("context_window") || msg.includes("maximum")) {
         return NextResponse.json(
-          { error: "AI returned an invalid response. Please try again." },
-          { status: 502 }
+          { error: "Question or context is too long. Try a shorter question or a smaller document.", requestId },
+          { status: 400 },
         );
       }
     }
 
-    const errorMessage =
-      error instanceof Error ? error.message : "Could not answer this question.";
-
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to generate response. Please try again.", requestId },
+      { status: 500 },
+    );
   }
+
+  // ── Cache image analysis ─────────────────────────────────────
+  if (imageUrl) {
+    if (shouldProcessImage) {
+      const isRelated =
+        !text.toLowerCase().includes("không liên quan") &&
+        !text.toLowerCase().includes("not related");
+      setCachedImageAnalysis(imageUrl, text.slice(0, 200), isRelated);
+    } else {
+      console.log(`[${requestId}] Caching random image as unrelated`);
+      setCachedImageAnalysis(imageUrl, "random image", false);
+    }
+  }
+
+  // ── Persist to DB ────────────────────────────────────────────
+  const docCitations: CachedCitation[] = citations.map((citation) => ({
+    filename: document.filename,
+    chunkIndex: citation.chunkIndex,
+    contentPreview: citation.contentPreview,
+  }));
+  const dbCitations: CachedCitation[] = [...citedFileCitations, ...docCitations];
+
+  let assistantMessageId: string | null = null;
+
+  if (sessionId) {
+    const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
+    const savedUserMessage = await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
+
+    if (!savedUserMessage) {
+      console.error(`[${requestId}] Failed to save user message, continuing anyway`);
+    }
+
+    const savedAssistantMessage = await saveMessage(
+      sessionId,
+      "assistant",
+      text,
+      dbCitations,
+    );
+
+    if (!savedAssistantMessage) {
+      console.error(`[${requestId}] Failed to save assistant message`);
+    }
+
+    await touchChatSession(sessionId);
+    assistantMessageId = savedAssistantMessage?.id ?? null;
+  }
+
+  // ── Cache answer ─────────────────────────────────────────────
+  await upsertCachedAnswer({
+    userId: user.id,
+    documentId,
+    sessionId,
+    question: message,
+    answer: text,
+    citations: dbCitations,
+  });
+
+  const elapsedMs = Date.now() - startTime;
+
+  return NextResponse.json({
+    answer: text,
+    citations: toUICitations(citations),
+    sessionId,
+    assistantMessageId,
+    reused: false,
+    cacheHit: false,
+    document: {
+      id: document.id,
+      filename: document.filename,
+    },
+    requestId,
+    meta: {
+      elapsedMs,
+      contextUsed: topChunks.length > 0,
+      chunksRetrieved: topChunks.length,
+      imageProcessed: shouldProcessImage,
+      contextChars: context.length,
+    },
+  }, {
+    headers: {
+      "X-Request-Id": requestId,
+      "X-Cache-Hit": "false",
+      "X-Response-Time": String(elapsedMs),
+    },
+  });
 }

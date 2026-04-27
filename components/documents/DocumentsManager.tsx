@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   FileText,
   MessageSquare,
@@ -13,6 +13,8 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  Loader2,
+  File,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -39,8 +41,53 @@ type PendingDeletion = {
   deletedAt: number;
 };
 
+type FileType = "pdf" | "docx" | "txt" | "md" | "csv" | "unknown";
+
+function getFileType(filename: string): FileType {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return "pdf";
+  if (ext === "docx" || ext === "doc") return "docx";
+  if (ext === "txt") return "txt";
+  if (ext === "md") return "md";
+  if (ext === "csv") return "csv";
+  return "unknown";
+}
+
+const FILE_TYPE_CONFIG: Record<FileType, { icon: typeof FileText; color: string; bg: string; label: string }> = {
+  pdf: { icon: FileArchive, color: "text-red-500", bg: "bg-red-50 dark:bg-red-500/10", label: "PDF" },
+  docx: { icon: FileText, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-500/10", label: "DOCX" },
+  txt: { icon: File, color: "text-stone-500", bg: "bg-stone-50 dark:bg-stone-500/10", label: "TXT" },
+  md: { icon: FileText, color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-500/10", label: "MD" },
+  csv: { icon: FileText, color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-500/10", label: "CSV" },
+  unknown: { icon: File, color: "text-stone-400", bg: "bg-stone-50 dark:bg-stone-500/10", label: "FILE" },
+};
+
 const PENDING_DELETIONS_KEY = "pendingDocumentDeletions";
 const UNDO_TIMEOUT_MS = 30000;
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return "Unknown size";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "Unknown date";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 export function DocumentsManager({
   initialDocuments,
@@ -210,13 +257,13 @@ export function DocumentsManager({
       // Remove from pending after successful deletion
       const updatedPending: PendingDeletion[] = JSON.parse(
         localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
-      ).filter((d) => d.documentId !== documentId);
+      ).filter((d: PendingDeletion) => d.documentId !== documentId);
       localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
     } catch (error) {
       // Remove from pending on failure
       const updatedPending: PendingDeletion[] = JSON.parse(
         localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
-      ).filter((d) => d.documentId !== documentId);
+      ).filter((d: PendingDeletion) => d.documentId !== documentId);
       localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
 
       // Restore the document in UI
@@ -243,7 +290,7 @@ export function DocumentsManager({
         // Remove from pending
         const updatedPending: PendingDeletion[] = JSON.parse(
           localStorage.getItem(PENDING_DELETIONS_KEY) || "[]"
-        ).filter((d) => d.documentId !== documentId);
+        ).filter((d: PendingDeletion) => d.documentId !== documentId);
         localStorage.setItem(PENDING_DELETIONS_KEY, JSON.stringify(updatedPending));
         router.refresh();
       } else {
@@ -257,14 +304,14 @@ export function DocumentsManager({
   return (
     <div className="mx-auto max-w-6xl">
       {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-stone-900 dark:text-stone-100">
             Your Documents
           </h1>
-          <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">
+          <p className="mt-1.5 text-sm text-stone-500 dark:text-stone-400">
             {documents.length > 0
-              ? `${documents.length} document${documents.length !== 1 ? "s" : ""} in your library`
+              ? `${documents.length} document${documents.length !== 1 ? "s" : ""} in your library — upload more to expand your knowledge base`
               : "Upload your first document to get started"}
           </p>
         </div>
@@ -272,12 +319,36 @@ export function DocumentsManager({
         <button
           disabled={uploading}
           onClick={() => document.getElementById("file-upload")?.click()}
-          className="group inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-100 px-3.5 py-2 text-sm font-medium text-stone-600 shadow-sm transition-all hover:bg-stone-200 hover:border-stone-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700"
+          className="group inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"
         >
-          <Upload className="h-4 w-4 transition-transform group-hover:scale-110" />
-          {uploading ? "Processing..." : "Upload Files"}
+          {uploading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            <>
+              <Upload className="h-4 w-4 transition-transform group-hover:scale-110" />
+              Upload Files
+            </>
+          )}
         </button>
       </div>
+
+      {/* Upload progress indicator */}
+      {uploading && (
+        <div className="mb-6 flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+          <Loader2 className="h-4 w-4 animate-spin text-stone-400" />
+          <span className="text-sm text-stone-600 dark:text-stone-400">
+            Processing your files...
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <div className="h-1.5 w-32 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-700">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-stone-400" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drop zone */}
       <div
@@ -287,55 +358,58 @@ export function DocumentsManager({
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={`relative mb-8 overflow-hidden rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200 ${
+        className={`relative mb-10 overflow-hidden rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-300 ${
           isDragging
-            ? "scale-[1.01] border-stone-400 bg-stone-200/50 dark:border-stone-500 dark:bg-stone-800/50"
-            : "border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-900"
+            ? "scale-[1.02] border-primary bg-primary/5 dark:border-primary-hover dark:bg-primary/10 shadow-md"
+            : "border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-900/50"
         }`}
       >
+        {/* Animated border gradient when dragging */}
+        {isDragging && (
+          <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-primary/10 via-transparent to-primary/10 animate-pulse pointer-events-none" />
+        )}
 
         <div className="relative">
           <div
-            className={`mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg transition-all duration-200 ${
+            className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl transition-all duration-300 ${
               isDragging
-                ? "bg-stone-300 dark:bg-stone-700"
+                ? "bg-primary/20 dark:bg-primary/30 scale-110"
                 : "bg-stone-200 dark:bg-stone-800"
             }`}
           >
             <Upload
-              className={`h-5 w-5 transition-colors duration-200 ${
-                isDragging ? "text-stone-600 dark:text-stone-300" : "text-stone-400 dark:text-stone-500"
+              className={`h-6 w-6 transition-all duration-300 ${
+                isDragging ? "text-primary dark:text-primary-hover scale-110" : "text-stone-400 dark:text-stone-500"
               }`}
             />
           </div>
 
           <p
-            className={`mb-1 text-sm font-medium transition-colors duration-200 ${
+            className={`mb-2 text-base font-semibold transition-colors duration-300 ${
               isDragging
-                ? "text-stone-700 dark:text-stone-300"
-                : "text-stone-600 dark:text-stone-400"
+                ? "text-primary dark:text-primary-hover"
+                : "text-stone-700 dark:text-stone-300"
             }`}
           >
-            {isDragging ? "Drop files here" : "Drag and drop files here"}
+            {isDragging ? "Release to upload" : "Drag and drop your files here"}
           </p>
 
-          <p className="mb-3 text-xs text-stone-400 dark:text-stone-500">
+          <p className="mb-5 text-sm text-stone-400 dark:text-stone-500">
             or click the button above to browse
           </p>
 
-          <div className="flex items-center justify-center gap-4 text-[10px] text-stone-400 dark:text-stone-600">
-            <span className="flex items-center gap-1">
-              <FileArchive className="h-3 w-3" /> PDF
-            </span>
-            <span className="flex items-center gap-1">
-              <FileText className="h-3 w-3" /> DOCX
-            </span>
-            <span className="flex items-center gap-1">
-              <FileText className="h-3 w-3" /> TXT
-            </span>
-            <span className="flex items-center gap-1">
-              <FileText className="h-3 w-3" /> MD
-            </span>
+          <div className="flex items-center justify-center gap-5 text-[11px] text-stone-400 dark:text-stone-600">
+            {[
+              { ext: "PDF", icon: FileArchive, color: "text-red-400" },
+              { ext: "DOCX", icon: FileText, color: "text-blue-400" },
+              { ext: "TXT", icon: File, color: "text-stone-400" },
+              { ext: "MD", icon: FileText, color: "text-emerald-400" },
+              { ext: "CSV", icon: File, color: "text-amber-400" },
+            ].map(({ ext, icon: Icon, color }) => (
+              <span key={ext} className={`flex items-center gap-1 ${color}`}>
+                <Icon className="h-3.5 w-3.5" /> {ext}
+              </span>
+            ))}
           </div>
         </div>
 
@@ -343,7 +417,7 @@ export function DocumentsManager({
           id="file-upload"
           type="file"
           multiple
-          accept=".pdf,.docx,.txt,.md"
+          accept=".pdf,.docx,.doc,.txt,.md,.csv"
           className="hidden"
           onChange={(e) =>
             e.target.files && void handleFileUpload(e.target.files)
@@ -353,88 +427,107 @@ export function DocumentsManager({
 
       {/* Documents grid */}
       {documents.length === 0 ? (
-        <div className="rounded-xl border border-stone-200 bg-stone-50 py-14 text-center dark:border-stone-700 dark:bg-stone-900">
-          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-lg bg-stone-200 dark:bg-stone-800">
-            <FileText className="h-5 w-5 text-stone-400 dark:text-stone-500" />
+        <div className="rounded-2xl border border-stone-200 bg-stone-50 py-16 text-center dark:border-stone-700 dark:bg-stone-900">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-200 dark:bg-stone-800">
+            <FileText className="h-7 w-7 text-stone-400 dark:text-stone-500" />
           </div>
-          <h3 className="mb-1 text-sm font-medium text-stone-700 dark:text-stone-100">
+          <h3 className="mb-2 text-base font-medium text-stone-700 dark:text-stone-100">
             No documents yet
           </h3>
-          <p className="text-xs text-stone-500 dark:text-stone-400">
-            Upload your first file to start chatting with your documents.
+          <p className="text-sm text-stone-500 dark:text-stone-400">
+            Upload your first file above to start chatting with your documents.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {documents.map((doc) => (
-            <div
-              key={doc.id}
-              className="group relative overflow-hidden rounded-xl border border-stone-200 bg-stone-50 p-4 transition-all duration-200 hover:border-stone-300 hover:shadow-sm dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-600"
-            >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {documents.map((doc) => {
+            const fileType = getFileType(doc.filename);
+            const typeConfig = FILE_TYPE_CONFIG[fileType];
+            const FileIcon = typeConfig.icon;
 
-              <div className="relative">
-                {/* File icon and info */}
-                <div className="mb-2.5 flex items-start gap-2.5">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-200 transition-colors group-hover:bg-stone-300 dark:bg-stone-800 dark:group-hover:bg-stone-700">
-                    <FileText className="h-4 w-4 text-stone-500 dark:text-stone-400" />
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-stone-800 dark:text-stone-100">
-                      {doc.filename}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-stone-400 dark:text-stone-500">
-                      {doc.size ?? "Ready to chat"}
-                    </p>
-                  </div>
+            return (
+              <div
+                key={doc.id}
+                className="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white p-5 transition-all duration-200 hover:border-stone-300 hover:shadow-lg hover:shadow-stone-200/50 dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-600 dark:hover:shadow-black/20"
+              >
+                {/* File type badge */}
+                <div className={`absolute right-4 top-4 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${typeConfig.bg} ${typeConfig.color}`}>
+                  <FileIcon className="h-3 w-3" />
+                  {typeConfig.label}
                 </div>
 
-                {/* Summary */}
-                <div className="mb-2.5 rounded-lg border border-stone-100 bg-white p-2.5 dark:border-stone-800 dark:bg-stone-800/50">
-                  <div className="mb-1 flex items-center gap-1">
-                    <Sparkles className="h-2.5 w-2.5 text-stone-400" />
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-stone-500 dark:text-stone-400">
-                      AI Summary
-                    </p>
+                <div className="relative">
+                  {/* File icon and info */}
+                  <div className="mb-4 flex items-start gap-3 pr-16">
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${typeConfig.bg} transition-colors group-hover:scale-105`}>
+                      <FileIcon className={`h-5 w-5 ${typeConfig.color}`} />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-stone-800 dark:text-stone-100" title={doc.filename}>
+                        {doc.filename}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-stone-400 dark:text-stone-500">
+                        {doc.size ?? "Ready to chat"}
+                      </p>
+                    </div>
                   </div>
 
-                  {doc.summary ? (
-                    <p className="line-clamp-3 text-xs leading-relaxed text-stone-600 dark:text-stone-400">
-                      {doc.summary}
-                    </p>
-                  ) : (
-                    <p className="text-xs italic text-stone-400 dark:text-stone-600">
-                      No summary yet.
-                    </p>
-                  )}
-                </div>
+                  {/* Summary */}
+                  <div className="mb-4 rounded-xl border border-stone-100 bg-stone-50 p-3 dark:border-stone-800 dark:bg-stone-800/50">
+                    <div className="mb-2 flex items-center gap-1.5">
+                      <Sparkles className="h-3 w-3 text-amber-500" />
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                        AI Summary
+                      </p>
+                    </div>
 
-                {/* Actions */}
-                <div className="flex items-center gap-1.5">
-                  <Link
-                    href={`/chat?documentId=${doc.id}`}
-                    className="group/btn flex flex-1 items-center justify-center gap-1 rounded-lg border border-stone-200 bg-white py-1.5 text-xs font-medium text-stone-600 transition-all hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"
-                  >
-                    <MessageSquare className="h-3 w-3" />
-                    Chat
-                  </Link>
-
-                  <button
-                    type="button"
-                    disabled={deletingId === doc.id}
-                    onClick={() => void handleDeleteDocument(doc.id)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 text-stone-400 transition-all hover:border-red-200/50 hover:bg-red-50 hover:text-red-600 dark:border-stone-700 dark:hover:border-red-500/30 dark:hover:bg-red-900/10 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deletingId === doc.id ? (
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-stone-300 border-t-red-500" />
+                    {doc.summary ? (
+                      <p className="line-clamp-3 text-xs leading-relaxed text-stone-600 dark:text-stone-400">
+                        {doc.summary}
+                      </p>
                     ) : (
-                      <Trash2 className="h-3 w-3" />
+                      <p className="text-xs italic text-stone-400 dark:text-stone-600">
+                        Summary will appear after processing...
+                      </p>
                     )}
-                  </button>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/chat?documentId=${doc.id}`}
+                      className="group/btn flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-stone-50 py-2.5 text-xs font-semibold text-stone-600 transition-all hover:bg-stone-100 hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700 active:scale-[0.98]"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5 transition-transform group-hover/btn:scale-110" />
+                      Chat with this doc
+                    </Link>
+
+                    <button
+                      type="button"
+                      disabled={deletingId === doc.id}
+                      onClick={() => void handleDeleteDocument(doc.id)}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 text-stone-400 transition-all hover:border-red-200/50 hover:bg-red-50 hover:text-red-600 dark:border-stone-700 dark:hover:border-red-500/30 dark:hover:bg-red-900/10 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50 active:scale-95"
+                    >
+                      {deletingId === doc.id ? (
+                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-stone-300 border-t-red-500" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+      )}
+
+      {/* Total count footer */}
+      {documents.length > 0 && (
+        <div className="mt-6 flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-xs text-stone-400 dark:border-stone-700 dark:bg-stone-900">
+          <span>{documents.length} document{documents.length !== 1 ? "s" : ""} loaded</span>
+          <span>Processed by SecondBrain AI</span>
         </div>
       )}
     </div>

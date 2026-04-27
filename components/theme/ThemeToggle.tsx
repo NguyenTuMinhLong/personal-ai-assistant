@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SunMoon } from "lucide-react";
+import { Sun, Moon } from "lucide-react";
 
 const THEME_STORAGE_KEY = "secondbrain-theme";
 type ThemeMode = "light" | "dark";
@@ -21,18 +21,20 @@ function getInitialTheme(): ThemeMode {
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<ThemeMode>("light");
+  const [mounted, setMounted] = useState(false);
 
-  // Sync theme sekali saat mount, tidak perlu setState in effect
   useEffect(() => {
     const initial = getInitialTheme();
     setTheme(initial);
     applyTheme(initial);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
+    if (!mounted) return;
     applyTheme(theme);
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [theme]);
+  }, [theme, mounted]);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
@@ -43,11 +45,19 @@ export function ThemeToggle() {
       type="button"
       onClick={toggleTheme}
       suppressHydrationWarning
-      className="inline-flex items-center justify-center rounded-lg border border-stone-200 bg-stone-100 p-2 text-stone-500 transition-colors hover:border-stone-300 hover:bg-stone-200 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-500 shadow-sm transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-800 dark:hover:text-stone-200 active:scale-90"
       aria-label="Toggle theme"
       title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
-      <SunMoon className="h-4 w-4" />
+      {mounted ? (
+        theme === "dark" ? (
+          <Moon className="h-4 w-4" />
+        ) : (
+          <Sun className="h-4 w-4" />
+        )
+      ) : (
+        <Sun className="h-4 w-4" />
+      )}
     </button>
   );
 }

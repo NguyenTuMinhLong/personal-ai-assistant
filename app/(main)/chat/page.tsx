@@ -5,7 +5,7 @@ import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { listUserDocuments } from "@/lib/documents";
 import { getChatSession, listMessages } from "@/lib/sessions";
 import { listSessionAnnotations } from "@/lib/annotations";
-import type { ChatSession, Message, MessageAnnotation, HighlightColor } from "@/types";
+import type { ChatSession, ChatFile, Message, MessageAnnotation, HighlightColor } from "@/types";
 
 type ChatPageProps = {
   searchParams: Promise<{
@@ -79,6 +79,7 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
       role: msg.role,
       content: msg.content,
       imageUrls: urls.length > 0 ? urls : undefined,
+      chatFiles: msg.chatFiles ? (msg.chatFiles.length > 0 ? msg.chatFiles : undefined) : undefined,
       citations: (msg.citations ?? []).map((c, i) => ({
         index: i + 1,
         snippet: c.contentPreview ?? "",

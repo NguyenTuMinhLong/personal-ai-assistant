@@ -6,168 +6,179 @@ import { getSupabaseUrl } from "@/lib/supabase";
 
 const BUCKET_NAME = "chat-images";
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
+const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const ALLOWED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp"] as const);
+
+// Magic byte signatures for image validation
+const MAGIC_BYTES: Record<string, Array<[string, number[]]>> = {
+  "image/jpeg": [["JPEG", [0xFF, 0xD8, 0xFF]]],
+  "image/png": [["PNG", [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]]],
+  "image/gif": [["GIF", [0x47, 0x49, 0x46, 0x38]]],
+  "image/webp": [["WebP", [0x52, 0x49, 0x46, 0x46]]],
+};
 
 function createSupabaseAdminClient() {
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
   if (!supabaseServiceRoleKey) {
     throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY.");
   }
-
   return createClient(getSupabaseUrl(), supabaseServiceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
+    auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
-type UploadError = {
-  code: string;
-  message: string;
-};
+function createErrorResponse(message: string, status: number, requestId?: string) {
+  return NextResponse.json(
+    { error: message, ...(requestId ? { requestId } : {}) },
+    { status },
+  );
+}
 
-function createErrorResponse(message: string, status: number): NextResponse {
-  return NextResponse.json({ error: message }, { status });
+function validateMagicBytes(buffer: Buffer, declaredType: string): boolean {
+  const magic = MAGIC_BYTES[declaredType];
+  if (!magic) return true;
+
+  for (const [, bytes] of magic) {
+    const header = buffer.slice(0, bytes.length);
+    if (header.equals(Buffer.from(bytes))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const requestId = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
   const user = await currentUser();
-
   if (!user) {
-    return createErrorResponse("Unauthorized", 401);
+    return createErrorResponse("Unauthorized", 401, requestId);
   }
-
-  let supabase: ReturnType<typeof createSupabaseAdminClient> | null = null;
 
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
 
-    // Edge case: No file provided
     if (!file) {
-      return createErrorResponse("No file provided. Please select an image.", 400);
+      return createErrorResponse("No file provided. Please select an image.", 400, requestId);
     }
 
-    // Edge case: Empty file
     if (file.size === 0) {
-      return createErrorResponse("The file is empty. Please select a valid image.", 400);
+      return createErrorResponse("The file is empty. Please select a valid image.", 400, requestId);
     }
 
-    // Edge case: File name missing or suspicious
     if (!file.name || file.name.length > 255) {
-      return createErrorResponse("Invalid file name.", 400);
+      return createErrorResponse("Invalid file name.", 400, requestId);
     }
 
-    // Edge case: Check extension matches MIME type
     const fileExtension = file.name.split(".").pop()?.toLowerCase() || "";
-    if (!ALLOWED_EXTENSIONS.includes(fileExtension)) {
+    if (!ALLOWED_EXTENSIONS.has(fileExtension)) {
       return createErrorResponse(
-        `Invalid file extension ".${fileExtension}". Allowed: ${ALLOWED_EXTENSIONS.join(", ")}.`,
-        400
+        `Invalid file extension ".${fileExtension}". Allowed: ${[...ALLOWED_EXTENSIONS].join(", ")}.`,
+        400,
+        requestId,
       );
     }
 
-    // Validate file type (MIME)
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!ALLOWED_TYPES.includes(file.type as typeof ALLOWED_TYPES[number])) {
       return createErrorResponse(
         `Unsupported format: ${file.type}. Supported: JPEG, PNG, GIF, WebP.`,
-        400
+        400,
+        requestId,
       );
     }
 
-    // Validate file size
     if (file.size > MAX_FILE_SIZE) {
-      const sizeMB = (MAX_FILE_SIZE / (1024 * 1024)).toFixed(0);
-      return createErrorResponse(`File too large. Maximum size is ${sizeMB}MB.`, 400);
+      return createErrorResponse(
+        `File too large. Maximum size is ${(MAX_FILE_SIZE / (1024 * 1024)).toFixed(0)}MB.`,
+        400,
+        requestId,
+      );
     }
 
-    // Validate file size is reasonable (detect corrupt files)
     if (file.size < 1000) {
-      return createErrorResponse("This image appears to be corrupted or invalid.", 400);
+      return createErrorResponse("This image appears to be corrupted or invalid.", 400, requestId);
     }
 
-    // Read file as array buffer
     let arrayBuffer: ArrayBuffer;
     try {
       arrayBuffer = await file.arrayBuffer();
     } catch {
-      return createErrorResponse("Failed to read the file. Please try again.", 400);
+      return createErrorResponse("Failed to read the file. Please try again.", 400, requestId);
     }
 
     const buffer = Buffer.from(arrayBuffer);
 
-    // Edge case: Buffer is empty after conversion
     if (buffer.length === 0) {
-      return createErrorResponse("Failed to process the image. Please try a different file.", 400);
+      return createErrorResponse("Failed to process the image. Please try a different file.", 400, requestId);
     }
 
-    // Generate unique filename with user isolation
-    const timestamp = Date.now();
-    const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const safeExtension = ALLOWED_EXTENSIONS.includes(fileExtension) ? fileExtension : "jpg";
-    const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 100);
-    const fileName = `${user.id}/${timestamp}-${randomSuffix}-${sanitizedName}`;
-
-    supabase = createSupabaseAdminClient();
-
-    // Upload to Supabase Storage with retry logic
-    let uploadResult;
-    let uploadError: UploadError | null = null;
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const { data, error } = await supabase.storage
-        .from(BUCKET_NAME)
-        .upload(fileName, buffer, {
-          contentType: file.type,
-          upsert: false,
-        });
-
-      if (error) {
-        const errorCode = error.statusCode || String(error.status) || "UNKNOWN";
-        uploadError = { code: errorCode, message: error.message };
-        // Only retry on network-like errors
-        if (attempt < 2 && (error.statusCode === "STORAGE_NETWORK_ERROR" || !error.status)) {
-          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-          continue;
-        }
-        break;
-      }
-
-      uploadResult = data;
-      uploadError = null;
-      break;
+    // Magic byte validation
+    const declaredMime = file.type;
+    if (!validateMagicBytes(buffer, declaredMime)) {
+      console.warn(`[${requestId}] Magic byte mismatch for ${file.name} (declared: ${declaredMime})`);
+      return createErrorResponse(
+        "File content does not match its declared type. Please upload a valid image.",
+        400,
+        requestId,
+      );
     }
 
-    if (uploadError) {
-      console.error("Storage upload error:", uploadError);
+    const safeExtension = ALLOWED_EXTENSIONS.has(fileExtension) ? fileExtension : "jpg";
+    const sanitizedName = file.name
+      .replace(/[^a-zA-Z0-9.-]/g, "_")
+      .slice(0, 100);
+    const fileName = `${user.id}/${requestId}-${sanitizedName}`;
 
-      // Specific error messages for common issues
-      if (uploadError.code === "STORAGE_BUCKET_NOT_FOUND") {
+    const supabase = createSupabaseAdminClient();
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(fileName, buffer, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (error) {
+      console.error(`[${requestId}] Storage upload error:`, error);
+
+      if (error.statusCode === "STORAGE_BUCKET_NOT_FOUND") {
         return createErrorResponse(
           "Storage not configured. Please contact support.",
-          500
+          500,
+          requestId,
         );
       }
-      if (uploadError.code === "STORAGE_QUOTA_EXCEEDED") {
+      if (error.statusCode === "STORAGE_QUOTA_EXCEEDED") {
         return createErrorResponse(
           "Storage quota exceeded. Please delete some images.",
-          507
+          507,
+          requestId,
         );
+      }
+      if (error.statusCode === 409 || error.message?.includes("already exists")) {
+        const { data: existing } = supabase.storage
+          .from(BUCKET_NAME)
+          .getPublicUrl(fileName);
+        return NextResponse.json({
+          url: existing.publicUrl,
+          fileName,
+          success: true,
+          requestId,
+          deduplicated: true,
+        });
       }
 
       return createErrorResponse(
         "Failed to upload image. Please try again.",
-        500
+        500,
+        requestId,
       );
     }
 
-    // Get public URL
     const { data: urlData } = supabase.storage
       .from(BUCKET_NAME)
       .getPublicUrl(fileName);
@@ -176,29 +187,32 @@ export async function POST(req: NextRequest) {
       url: urlData.publicUrl,
       fileName,
       success: true,
+      requestId,
     });
   } catch (error) {
-    console.error("Upload error:", error);
+    console.error(`[${requestId}] Upload error:`, error);
 
-    // Specific error handling
     if (error instanceof Error) {
       if (error.message.includes("fetch")) {
         return createErrorResponse(
           "Network error during upload. Please check your connection.",
-          503
+          503,
+          requestId,
         );
       }
       if (error.message.includes("SUPABASE_SERVICE_ROLE_KEY")) {
         return createErrorResponse(
           "Server configuration error. Please contact support.",
-          500
+          500,
+          requestId,
         );
       }
     }
 
     return createErrorResponse(
       "Something went wrong. Please try again.",
-      500
+      500,
+      requestId,
     );
   }
 }

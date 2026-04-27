@@ -19,6 +19,7 @@ import {
   ImagePlus,
   Loader2,
   MessageSquare,
+  AlertCircle,
   Pin,
   Plus,
   SendHorizonal,
@@ -26,6 +27,8 @@ import {
   Trash2,
   X,
   ZoomIn,
+  RotateCcw,
+  Edit3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -61,6 +64,7 @@ type ChatMessage = {
   selectionStart?: number | null;
   selectionEnd?: number | null;
   createdAt?: string | null;
+  error?: string | null;
 };
 
 type SavedNote = {
@@ -86,7 +90,7 @@ type ChatWorkspaceProps = {
   initialNotes?: SavedNote[];
 };
 
-// ─── Highlight color config ─────────────────────────────────────
+// ─── Highlight colors ────────────────────────────────────────────
 const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
   { color: "rose", label: "Rose" },
   { color: "amber", label: "Amber" },
@@ -95,7 +99,7 @@ const HIGHLIGHT_COLORS: Array<{ color: HighlightColor; label: string }> = [
   { color: "violet", label: "Violet" },
 ];
 
-// ─── Utility ────────────────────────────────────────────────────
+// ─── Utilities ────────────────────────────────────────────────────
 function createMessageId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
@@ -120,7 +124,12 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-// Client-only timestamp wrapper to avoid SSR hydration mismatch
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function RelativeTime({ dateStr }: { dateStr: string }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -128,7 +137,7 @@ function RelativeTime({ dateStr }: { dateStr: string }) {
   return <span suppressHydrationWarning>{formatRelativeTime(dateStr)}</span>;
 }
 
-// ─── Highlight color swatch button ──────────────────────────────
+// ─── Highlight swatch ────────────────────────────────────────────
 function HighlightSwatch({
   color,
   label,
@@ -171,7 +180,7 @@ function HighlightSwatch({
   );
 }
 
-// ─── Inline highlighted text renderer ───────────────────────────
+// ─── Highlighted text renderer ──────────────────────────────────
 function HighlightedText({
   content,
   highlightColor,
@@ -211,7 +220,32 @@ function HighlightedText({
   );
 }
 
-// ─── Message actions (AI messages only) ─────────────────────────
+// ─── Citation pill ────────────────────────────────────────────────
+function CitationPill({
+  citation,
+  onClick,
+}: {
+  citation: Citation;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] transition-all hover:border-stone-300 hover:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600 dark:hover:bg-stone-700"
+      title={citation.snippet}
+    >
+      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-stone-200 text-[8px] font-bold text-stone-600 dark:bg-stone-600 dark:text-stone-300">
+        {citation.index}
+      </span>
+      <span className="max-w-[120px] truncate text-stone-500 dark:text-stone-400">
+        {citation.snippet.slice(0, 30)}...
+      </span>
+    </button>
+  );
+}
+
+// ─── Message actions ─────────────────────────────────────────────
 interface MessageActionsProps {
   message: ChatMessage;
   highlightPickerOpen: boolean;
@@ -220,6 +254,7 @@ interface MessageActionsProps {
   onCopy: (content: string, messageId: string) => void;
   onToggleNote: (messageId: string) => Promise<void>;
   onDeleteMessage: (messageId: string) => void;
+  onRetryMessage: (messageId: string) => void;
   copiedMessageId: string | null;
   isSaved: boolean;
 }
@@ -232,19 +267,18 @@ const MessageActions = memo(function MessageActions({
   onCopy,
   onToggleNote,
   onDeleteMessage,
+  onRetryMessage,
   copiedMessageId,
   isSaved,
 }: MessageActionsProps) {
   const isCopied = copiedMessageId === message.id;
+  const hasError = !!message.error;
 
   return (
     <div className="mt-2 ml-1 flex flex-wrap items-center gap-1.5">
-      {/* Highlight toggle — per-message */}
       <button
         onClick={() =>
-          onHighlightPickerToggle(
-            highlightPickerOpen ? null : message.id,
-          )
+          onHighlightPickerToggle(highlightPickerOpen ? null : message.id)
         }
         className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
           highlightPickerOpen
@@ -265,7 +299,6 @@ const MessageActions = memo(function MessageActions({
         {highlightPickerOpen ? "Done" : "Highlight"}
       </button>
 
-      {/* Color picker — only when picker is open for this message */}
       {highlightPickerOpen && (
         <div className="flex items-center gap-0.5 rounded-md border border-stone-200 bg-white p-1 dark:border-stone-700 dark:bg-stone-800">
           {HIGHLIGHT_COLORS.map((h) => (
@@ -280,7 +313,6 @@ const MessageActions = memo(function MessageActions({
         </div>
       )}
 
-      {/* Copy */}
       <button
         onClick={() => onCopy(message.content ?? "", message.id)}
         className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
@@ -298,7 +330,6 @@ const MessageActions = memo(function MessageActions({
         )}
       </button>
 
-      {/* Save note */}
       <button
         data-testid="save-note-btn"
         type="button"
@@ -313,7 +344,18 @@ const MessageActions = memo(function MessageActions({
         {isSaved ? "Saved" : "Save note"}
       </button>
 
-      {/* Delete */}
+      {hasError && (
+        <button
+          type="button"
+          onClick={() => onRetryMessage(message.id)}
+          className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-600 transition-all hover:border-red-300 hover:bg-red-100 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30"
+          title="Retry this message"
+        >
+          <RotateCcw className="h-3 w-3" />
+          Retry
+        </button>
+      )}
+
       <button
         type="button"
         onClick={() => onDeleteMessage(message.id)}
@@ -327,7 +369,7 @@ const MessageActions = memo(function MessageActions({
   );
 });
 
-// ─── Message bubble ──────────────────────────────────────────────
+// ─── Message bubble ────────────────────────────────────────────────
 interface MessageBubbleProps {
   message: ChatMessage;
   isSaved: boolean;
@@ -340,9 +382,11 @@ interface MessageBubbleProps {
   onCopy: (content: string, messageId: string) => void;
   onToggleNote: (messageId: string) => Promise<void>;
   onDeleteMessage: (messageId: string) => void;
+  onRetryMessage: (messageId: string) => void;
   onFlash: (messageId: string) => void;
   onPendingSelectionChange: (selection: { messageId: string; text: string; selectionStart: number; selectionEnd: number } | null) => void;
   onRef?: (el: HTMLDivElement | null) => void;
+  onCitationClick?: (citationIndex: number) => void;
 }
 
 const MessageBubble = memo(function MessageBubble({
@@ -351,21 +395,22 @@ const MessageBubble = memo(function MessageBubble({
   flashedMessageId,
   copiedMessageId,
   highlightPickerOpen,
+  pendingSelection,
   onHighlightPickerToggle,
   onHighlight,
   onCopy,
   onToggleNote,
   onDeleteMessage,
+  onRetryMessage,
   onFlash,
   onPendingSelectionChange,
   onRef,
-}: Omit<MessageBubbleProps, "onImageClick">) {
+  onCitationClick,
+}: MessageBubbleProps & { onCitationClick?: (citationIndex: number) => void }) {
   const isUser = message.role === "user";
   const isFlashed = flashedMessageId === message.id;
-  const isCopied = copiedMessageId === message.id;
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
-  // Capture text selection when highlight picker is open for this message
   const handleTextSelection = useCallback(() => {
     if (!highlightPickerOpen || isUser) return;
     const selection = window.getSelection();
@@ -377,7 +422,6 @@ const MessageBubble = memo(function MessageBubble({
     const contentEl = document.getElementById(`msg-content-${message.id}`);
     if (!contentEl) return;
 
-    // Clone everything before the selection start, then count plain text characters
     const preRange = document.createRange();
     preRange.setStart(contentEl, 0);
     preRange.setEnd(range.startContainer, range.startOffset);
@@ -394,6 +438,35 @@ const MessageBubble = memo(function MessageBubble({
     });
   }, [highlightPickerOpen, isUser, message.id, onPendingSelectionChange]);
 
+  const renderContent = (content: string) => {
+    const parts = content.split(/\[(\d+)\]/g);
+    return parts.map((part, i) => {
+      if (i % 2 === 1) {
+        const idx = parseInt(part, 10);
+        const citation = message.citations?.find(c => c.index === idx);
+        if (citation && onCitationClick) {
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onCitationClick(idx)}
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-stone-200 text-[8px] font-bold text-stone-600 align-middle transition-colors hover:bg-stone-300 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600"
+              title={citation.snippet}
+            >
+              {idx}
+            </button>
+          );
+        }
+        return (
+          <sup key={i} className="text-[8px] font-bold text-stone-400">
+            [{part}]
+          </sup>
+        );
+      }
+      return part;
+    });
+  };
+
   return (
     <div
       data-testid="chat-message"
@@ -405,27 +478,25 @@ const MessageBubble = memo(function MessageBubble({
           onRef(element);
         }
       }}
-      className={`group transition-all duration-300 ${
+      className={`group animate-in slide-in-from-bottom-1 fade-in duration-300 ${
         isFlashed ? "scale-[1.01]" : ""
       }`}
     >
       <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
-        {/* Avatar */}
         <div
-          className={`shrink-0 flex h-7 w-7 items-center justify-center rounded-full ${
+          className={`shrink-0 flex h-8 w-8 items-center justify-center rounded-full transition-transform group-hover:scale-110 ${
             isUser
               ? "bg-stone-300 dark:bg-stone-600"
               : "bg-stone-200 dark:bg-stone-700"
           }`}
         >
           {isUser ? (
-            <span className="text-[10px] font-medium text-stone-700 dark:text-stone-200">Y</span>
+            <span className="text-xs font-semibold text-stone-700 dark:text-stone-200">Y</span>
           ) : (
             <Sparkles className="h-3.5 w-3.5 text-stone-500 dark:text-stone-400" />
           )}
         </div>
 
-        {/* Content */}
         <div className={`flex-1 min-w-0 ${isUser ? "items-end" : ""}`}>
           <div className="mb-1 flex items-center gap-2">
             <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
@@ -449,9 +520,14 @@ const MessageBubble = memo(function MessageBubble({
                 <RelativeTime dateStr={message.createdAt} />
               </span>
             )}
+            {message.error && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:bg-red-900/30 dark:text-red-400">
+                <AlertCircle className="h-2.5 w-2.5" />
+                Failed
+              </span>
+            )}
           </div>
 
-          {/* Message content */}
           <div
             id={`msg-content-${message.id}`}
             className={`relative rounded-2xl px-4 py-3 ${
@@ -461,7 +537,6 @@ const MessageBubble = memo(function MessageBubble({
             } ${highlightPickerOpen && !isUser ? "ring-2 ring-stone-400 dark:ring-stone-500" : ""}`}
             onMouseUp={handleTextSelection}
           >
-            {/* Multiple images - horizontal scrollable row */}
             {message.imageUrls && message.imageUrls.length > 0 && (
               <div className="mb-2 flex gap-2 overflow-x-auto">
                 {message.imageUrls.slice(0, 5).map((url, idx) => (
@@ -488,7 +563,6 @@ const MessageBubble = memo(function MessageBubble({
               </div>
             )}
 
-            {/* Attached files */}
             {message.chatFiles && message.chatFiles.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2">
                 {message.chatFiles.map((file, idx) => (
@@ -499,6 +573,9 @@ const MessageBubble = memo(function MessageBubble({
                     <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
                     <span className="max-w-[120px] truncate text-xs text-stone-600 dark:text-stone-300">
                       {file.filename}
+                    </span>
+                    <span className="text-[10px] text-stone-400">
+                      {formatFileSize(file.fileSize)}
                     </span>
                     <a
                       href={file.storageUrl}
@@ -515,38 +592,42 @@ const MessageBubble = memo(function MessageBubble({
               </div>
             )}
 
-            <p className="whitespace-pre-wrap text-sm leading-relaxed">
-              <HighlightedText
-                content={message.content ?? ""}
-                highlightColor={message.highlightColor}
-                selectionStart={message.selectionStart}
-                selectionEnd={message.selectionEnd}
-              />
-            </p>
+            {message.error ? (
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                <p className="flex-1 text-sm text-red-600 dark:text-red-400">
+                  {message.error}
+                </p>
+              </div>
+            ) : (
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                <HighlightedText
+                  content={message.content ?? ""}
+                  highlightColor={message.highlightColor}
+                  selectionStart={message.selectionStart}
+                  selectionEnd={message.selectionEnd}
+                />
+              </p>
+            )}
           </div>
 
-          {/* Citations */}
-          {!isUser && Array.isArray(message.citations) && message.citations.length > 0 && (
-            <div className="mt-1.5">
-              <div className="rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800/50">
-                {message.citations.slice(0, 3).map((citation) => (
-                  <div
-                    key={citation.index}
-                    className="mb-0.5 flex items-center gap-1.5"
-                  >
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-stone-200 text-[9px] font-bold text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                      {citation.index}
-                    </span>
-                    <span className="text-[10px] text-stone-500 dark:text-stone-500">
-                      {(citation.snippet ?? "").slice(0, 40)}...
-                    </span>
-                  </div>
-                ))}
-              </div>
+          {!isUser && !message.error && Array.isArray(message.citations) && message.citations.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {message.citations.slice(0, 5).map((citation) => (
+                <CitationPill
+                  key={citation.index}
+                  citation={citation}
+                  onClick={onCitationClick ? () => onCitationClick(citation.index) : undefined}
+                />
+              ))}
+              {message.citations.length > 5 && (
+                <span className="text-[10px] text-stone-400">
+                  +{message.citations.length - 5} more
+                </span>
+              )}
             </div>
           )}
 
-          {/* Action buttons */}
           {!isUser ? (
             <MessageActions
               message={message}
@@ -556,17 +637,17 @@ const MessageBubble = memo(function MessageBubble({
               onCopy={onCopy}
               onToggleNote={onToggleNote}
               onDeleteMessage={onDeleteMessage}
+              onRetryMessage={onRetryMessage}
               copiedMessageId={copiedMessageId}
               isSaved={isSaved}
             />
           ) : (
-            /* User message actions: Copy + Delete */
             <div className="mt-2 ml-1 flex items-center justify-end gap-1.5">
               <button
                 onClick={() => onCopy(message.content ?? "", message.id)}
                 className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-[10px] font-medium text-stone-500 transition-all hover:border-stone-300 hover:text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600"
               >
-                {isCopied ? (
+                {copiedMessageId === message.id ? (
                   <>
                     <Check className="h-3 w-3 text-emerald-600" />
                     Copied!
@@ -592,7 +673,6 @@ const MessageBubble = memo(function MessageBubble({
         </div>
       </div>
 
-      {/* Lightbox */}
       {lightboxImage && (
         <ImageLightbox
           imageUrl={lightboxImage}
@@ -603,25 +683,47 @@ const MessageBubble = memo(function MessageBubble({
   );
 });
 
-// ─── Typing indicator ───────────────────────────────────────────
+// ─── Date separator ────────────────────────────────────────────────
+function DateSeparator({ dateStr }: { dateStr: string }) {
+  const label = (() => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    if (days === 0) return "Today";
+    if (days === 1) return "Yesterday";
+    if (days < 7) return date.toLocaleDateString("en-US", { weekday: "long" });
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  })();
+
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <div className="flex-1 border-t border-stone-200 dark:border-stone-700" />
+      <span className="text-[10px] font-medium text-stone-400 dark:text-stone-500">{label}</span>
+      <div className="flex-1 border-t border-stone-200 dark:border-stone-700" />
+    </div>
+  );
+}
+
+// ─── Typing indicator ─────────────────────────────────────────────
 const TypingIndicator = memo(function TypingIndicator() {
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex items-start gap-3 animate-in slide-in-from-bottom-1 fade-in duration-300">
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-stone-200 dark:bg-stone-700">
         <Sparkles className="h-3.5 w-3.5 text-stone-500 dark:text-stone-400" />
       </div>
-      <div className="rounded-2xl border border-stone-200 bg-white px-5 py-4 dark:border-stone-700 dark:bg-stone-800">
+      <div className="rounded-2xl border border-stone-200 bg-white px-5 py-4 dark:border-stone-700 dark:bg-stone-800 shadow-sm">
         <div className="flex items-center gap-1.5">
-          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.3s]" />
-          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.15s]" />
-          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400" />
+          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.3s] [animation-duration:0.6s]" />
+          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-delay:-0.15s] [animation-duration:0.6s]" />
+          <div className="h-2 w-2 animate-bounce rounded-full bg-stone-400 [animation-duration:0.6s]" />
         </div>
       </div>
     </div>
   );
 });
 
-// ─── Main component ─────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────
 export function ChatWorkspace({
   documents,
   initialDocumentId,
@@ -644,38 +746,32 @@ export function ChatWorkspace({
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
-  const [filePreviews, setFilePreviews] = useState<Array<ChatFile & { uploading?: boolean }>>([]);
-  const [uploadingFile, setUploadingFile] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [filePreviews, setFilePreviews] = useState<Array<ChatFile & { uploading?: boolean; uploadError?: string }>>([]);
   const [sending, setSending] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(
-    null,
-  );
+  const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-
-  // Per-message highlight: which message has its color picker open
-  const [highlightPickerMessageId, setHighlightPickerMessageId] =
-    useState<string | null>(null);
-
-  // Pending text selection waiting for a color to be picked
-  const pendingSelectionRef = useRef<{
-    messageId: string;
-    text: string;
-    selectionStart: number;
-    selectionEnd: number;
-  } | null>(null);
+  const [highlightPickerMessageId, setHighlightPickerMessageId] = useState<string | null>(null);
   const [pendingSelection, setPendingSelection] = useState<{
     messageId: string;
     text: string;
     selectionStart: number;
     selectionEnd: number;
   } | null>(null);
-
-  // Resizable layout state
   const [sidebarWidth, setSidebarWidth] = useState(256);
-  const [inputAreaHeight, setInputAreaHeight] = useState<number | null>(null);
+  const [renamingSession, setRenamingSession] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState<string>("");
+
+  const pendingSelectionRef = useRef<{
+    messageId: string;
+    text: string;
+    selectionStart: number;
+    selectionEnd: number;
+  } | null>(null);
 
   // ── Refs ─────────────────────────────────────────────────────
   const router = useRouter();
@@ -686,11 +782,11 @@ export function ChatWorkspace({
   const loadedSessionRef = useRef<string | null>(
     initialMessages && initialSessionId ? initialSessionId : null,
   );
+  const inputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
-  // ── Derived state ────────────────────────────────────────────
+  // ── Derived ────────────────────────────────────────────────────
   const currentDocumentId = initialDocumentId;
-
-  // ── Sessions (for pinned chat feature) ──────────────────────────
   const { sessions: chatSessions, refreshSessions } = useChatSessions(
     currentDocumentId ?? undefined,
   );
@@ -751,6 +847,40 @@ export function ChatWorkspace({
     };
   }, [imagePreviews]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Enter or Cmd+Enter to submit
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (formRef.current) {
+          formRef.current.requestSubmit();
+        }
+      }
+
+      // Escape to cancel highlight picker
+      if (e.key === "Escape") {
+        setHighlightPickerMessageId(null);
+        setPendingSelection(null);
+        pendingSelectionRef.current = null;
+        setErrorMessage(null);
+      }
+
+      // "/" to focus input (when not in input/textarea)
+      if (
+        e.key === "/" &&
+        document.activeElement?.tagName !== "INPUT" &&
+        document.activeElement?.tagName !== "TEXTAREA"
+      ) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   // ── Scroll helpers ────────────────────────────────────────────
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -766,10 +896,19 @@ export function ChatWorkspace({
     container.scrollTo({ top: container.scrollHeight, behavior });
   }, []);
 
-  const scrollToMessage = useCallback((messageId: string) => {
+  useEffect(() => {
+    if (messages.length === 0) return;
     const container = scrollContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 150) {
+      scrollToLatest("smooth");
+    }
+  }, [messages.length, messages.at(-1)?.id]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
     const element = messageRefs.current[messageId];
-    if (!container || !element) return;
+    if (!element) return;
     element.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
@@ -799,29 +938,6 @@ export function ChatWorkspace({
     [sidebarWidth],
   );
 
-  const startInputResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const startY = e.clientY;
-    const startHeight = container.clientHeight;
-    const onMove = (ev: MouseEvent) => {
-      const delta = startY - ev.clientY;
-      const newH = Math.min(
-        Math.max(startHeight + delta, 200),
-        window.innerHeight * 0.7,
-      );
-      container.style.height = `${newH}px`;
-      updateScrollState();
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, [updateScrollState]);
-
   // ── Clipboard ────────────────────────────────────────────────
   const copyToClipboard = useCallback((content: string, messageId: string) => {
     navigator.clipboard
@@ -833,7 +949,7 @@ export function ChatWorkspace({
     setTimeout(() => setCopiedMessageId(null), 2000);
   }, []);
 
-  // ── Delete message ────────────────────────────────────────────
+  // ── Delete message ──────────────────────────────────────────
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
@@ -841,6 +957,30 @@ export function ChatWorkspace({
       toast.success("Message deleted");
     },
     [],
+  );
+
+  // ── Retry message ────────────────────────────────────────────
+  const handleRetryMessage = useCallback(
+    (messageId: string) => {
+      const msgIndex = messages.findIndex((m) => m.id === messageId);
+      if (msgIndex === -1) return;
+
+      const userMsg = messages[msgIndex - 1];
+      const assistantMsg = messages[msgIndex];
+
+      if (!userMsg || userMsg.role !== "user" || assistantMsg.role !== "assistant") {
+        toast.error("Can only retry failed assistant messages");
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.filter((m) => m.id !== messageId),
+      );
+      setErrorMessage(null);
+
+      inputRef.current?.focus();
+    },
+    [messages],
   );
 
   // ── Save annotation ───────────────────────────────────────────
@@ -882,7 +1022,7 @@ export function ChatWorkspace({
     [currentSessionId],
   );
 
-  // ── Toggle note ───────────────────────────────────────────────
+  // ── Toggle note ──────────────────────────────────────────────
   const handleToggleNote = useCallback(
     async (messageId: string) => {
       const existingNote = notes.find((n) => n.messageId === messageId);
@@ -904,7 +1044,6 @@ export function ChatWorkspace({
             toast.error("Failed to remove note");
           }
         } else {
-          // No session — remove locally only (fire-and-forget with local-only state)
           setNotes((prev) => prev.filter((n) => n.messageId !== messageId));
           toast.error("Note removed locally — no active session to persist to");
         }
@@ -938,7 +1077,6 @@ export function ChatWorkspace({
 
       const msg = messages.find((m) => m.id === note.messageId);
 
-      // Optimistic update
       setNotes((prev) =>
         prev.map((n) => (n.id === noteId ? { ...n, isPinned: pinnedNow } : n)),
       );
@@ -956,7 +1094,6 @@ export function ChatWorkspace({
           }),
         });
       } catch {
-        // Revert on failure
         setNotes((prev) =>
           prev.map((n) =>
             n.id === noteId ? { ...n, isPinned: !pinnedNow } : n,
@@ -968,7 +1105,7 @@ export function ChatWorkspace({
     [notes, messages, currentSessionId, pinnedCount],
   );
 
-  // ── Apply highlight with text selection ───────────────────────
+  // ── Apply highlight ────────────────────────────────────────────
   const handleHighlight = useCallback(
     async (messageId: string, color: HighlightColor) => {
       const sel = pendingSelectionRef.current?.messageId === messageId
@@ -994,21 +1131,9 @@ export function ChatWorkspace({
     [handleSaveAnnotation],
   );
 
-  // ── Build notes from annotations ──────────────────────────────
-  const buildNotesFromAnnotations = useCallback(
-    (annotations: PersistedAnnotation[]): SavedNote[] =>
-      annotations.map((a) => ({
-        id: a.id,
-        messageId: a.message_id,
-        isPinned: a.is_pinned ?? false,
-      })),
-    [],
-  );
-
-  // ── Load session messages ─────────────────────────────────────
+  // ── Load session messages ──────────────────────────────────────
   useEffect(() => {
     if (initialMessages && initialMessages.length > 0) {
-      // SSR already loaded — track it so we don't re-fetch
       if (currentSessionId) {
         loadedSessionRef.current = currentSessionId;
       }
@@ -1081,13 +1206,16 @@ export function ChatWorkspace({
             };
           });
 
-          const newNotes = buildNotesFromAnnotations(data.annotations ?? []);
+          const newNotes = data.annotations.map((a) => ({
+            id: a.id,
+            messageId: a.message_id,
+            isPinned: a.is_pinned ?? false,
+          }));
 
           setMessages(newMessages);
           setNotes(newNotes);
           loadedSessionRef.current = currentSessionId;
 
-          // Double-RAF: first fires before React paints, second fires after
           requestAnimationFrame(() =>
             requestAnimationFrame(() => scrollToLatest("auto")),
           );
@@ -1101,7 +1229,7 @@ export function ChatWorkspace({
         setLoadingHistory(false);
         isLoadingRef.current = false;
       });
-  }, [currentSessionId, buildNotesFromAnnotations, scrollToLatest]);
+  }, [currentSessionId, initialMessages, scrollToLatest]);
 
   // ── Image handling ─────────────────────────────────────────────
   const handleImageSelect = useCallback(
@@ -1109,12 +1237,12 @@ export function ChatWorkspace({
       const files = Array.from(e.target.files ?? []);
       if (files.length === 0) return;
 
-      // Limit to 5 images
       const newFiles = files.slice(0, 5 - selectedImages.length);
       const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
 
       setSelectedImages((prev) => [...prev, ...newFiles].slice(0, 5));
       setImagePreviews((prev) => [...prev, ...newPreviews].slice(0, 5));
+      setImageUploadError(null);
       e.target.value = "";
     },
     [selectedImages.length],
@@ -1125,6 +1253,7 @@ export function ChatWorkspace({
       if (imagePreviews[index]) URL.revokeObjectURL(imagePreviews[index]);
       setSelectedImages((prev) => prev.filter((_, i) => i !== index));
       setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+      setImageUploadError(null);
     },
     [imagePreviews],
   );
@@ -1133,6 +1262,7 @@ export function ChatWorkspace({
     imagePreviews.forEach((preview) => URL.revokeObjectURL(preview));
     setSelectedImages([]);
     setImagePreviews([]);
+    setImageUploadError(null);
   }, [imagePreviews]);
 
   // ── File handling ─────────────────────────────────────────────
@@ -1153,7 +1283,7 @@ export function ChatWorkspace({
       const toUpload = valid.slice(0, remaining);
 
       if (toUpload.length === 0) {
-        toast.error("Unsupported file type or limit reached.");
+        toast.error("Unsupported file type or limit reached (max 3).");
         e.target.value = "";
         return;
       }
@@ -1165,40 +1295,62 @@ export function ChatWorkspace({
         storageUrl: "",
         fileSize: file.size,
         uploading: true,
+        uploadError: undefined,
       }));
 
       setFilePreviews((prev) => [...prev, ...tempPreviews].slice(0, 3));
-      setUploadingFile(true);
+      setSending(true);
 
-      try {
-        for (const file of toUpload) {
+      for (let i = 0; i < toUpload.length; i++) {
+        const file = toUpload[i];
+        const tempId = tempPreviews[i].fileId;
+
+        try {
           const formData = new FormData();
           formData.append("file", file);
           const res = await fetch("/api/chat-files", { method: "POST", body: formData });
           const data = await res.json();
 
+          if (res.ok && data.fileId) {
+            setFilePreviews((prev) =>
+              prev.map((fp) =>
+                fp.fileId === tempId
+                  ? {
+                      ...fp,
+                      fileId: data.fileId ?? fp.fileId,
+                      storageUrl: data.storageUrl ?? fp.storageUrl,
+                      mimeType: data.mimeType ?? fp.mimeType,
+                      fileSize: data.fileSize ?? fp.fileSize,
+                      extractedText: data.extractedText ?? fp.extractedText,
+                      uploading: false,
+                      uploadError: undefined,
+                    }
+                  : fp,
+              ),
+            );
+          } else {
+            setFilePreviews((prev) =>
+              prev.map((fp) =>
+                fp.fileId === tempId
+                  ? { ...fp, uploading: false, uploadError: data.error ?? "Upload failed" }
+                  : fp,
+              ),
+            );
+            toast.error(`Upload failed: ${data.error ?? file.name}`);
+          }
+        } catch {
           setFilePreviews((prev) =>
             prev.map((fp) =>
-              fp.filename === file.name
-                ? {
-                    ...fp,
-                    fileId: data.fileId ?? fp.fileId,
-                    storageUrl: data.storageUrl ?? fp.storageUrl,
-                    mimeType: data.mimeType ?? fp.mimeType,
-                    fileSize: data.fileSize ?? fp.fileSize,
-                    extractedText: data.extractedText ?? fp.extractedText,
-                    uploading: false,
-                  }
+              fp.fileId === tempId
+                ? { ...fp, uploading: false, uploadError: "Network error" }
                 : fp,
             ),
           );
+          toast.error(`Upload failed: ${file.name}`);
         }
-      } catch {
-        toast.error("File upload failed.");
-        setFilePreviews((prev) => prev.filter((fp) => fp.filename !== toUpload[0].name));
-      } finally {
-        setUploadingFile(false);
       }
+
+      setSending(false);
       e.target.value = "";
     },
     [filePreviews.length],
@@ -1215,7 +1367,7 @@ export function ChatWorkspace({
     setFilePreviews([]);
   }, []);
 
-  // ── Drag and drop ──────────────────────────────────────────────
+  // ── Drag and drop ─────────────────────────────────────────────
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1239,7 +1391,6 @@ export function ChatWorkspace({
       const files = Array.from(e.dataTransfer.files);
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));
 
-      // Handle images
       if (imageFiles.length > 0) {
         const newFiles = imageFiles.slice(0, 5 - selectedImages.length);
         const newPreviews = newFiles.map((file) => URL.createObjectURL(file));
@@ -1252,7 +1403,6 @@ export function ChatWorkspace({
         }
       }
 
-      // Handle document files (PDF, DOCX, TXT, MD, CSV)
       const allowedDocTypes = [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1271,7 +1421,6 @@ export function ChatWorkspace({
           return;
         }
 
-        // Show temp previews
         const tempPreviews = toUpload.map((file) => ({
           fileId: `temp-${Date.now()}-${Math.random()}`,
           filename: file.name,
@@ -1279,12 +1428,12 @@ export function ChatWorkspace({
           storageUrl: "",
           fileSize: file.size,
           uploading: true,
+          uploadError: undefined,
         }));
 
         setFilePreviews((prev) => [...prev, ...tempPreviews].slice(0, 3));
-        setUploadingFile(true);
+        setSending(true);
 
-        // Upload files
         for (let i = 0; i < toUpload.length; i++) {
           const file = toUpload[i];
           const tempId = tempPreviews[i].fileId;
@@ -1304,21 +1453,32 @@ export function ChatWorkspace({
                         fileId: data.fileId,
                         storageUrl: data.storageUrl,
                         uploading: false,
+                        uploadError: undefined,
                       }
                     : fp,
                 ),
               );
             } else {
-              setFilePreviews((prev) => prev.filter((fp) => fp.fileId !== tempId));
-              toast.error(`Upload failed: ${data.error ?? file.name}`);
+              setFilePreviews((prev) =>
+                prev.map((fp) =>
+                  fp.fileId === tempId
+                    ? { ...fp, uploading: false, uploadError: data.error ?? "Upload failed" }
+                    : fp,
+                ),
+              );
             }
           } catch {
-            setFilePreviews((prev) => prev.filter((fp) => fp.fileId !== tempId));
-            toast.error(`Upload failed: ${file.name}`);
+            setFilePreviews((prev) =>
+              prev.map((fp) =>
+                fp.fileId === tempId
+                  ? { ...fp, uploading: false, uploadError: "Network error" }
+                  : fp,
+              ),
+            );
           }
         }
 
-        setUploadingFile(false);
+        setSending(false);
         toast.success(`Added ${toUpload.length} file${toUpload.length > 1 ? "s" : ""}`);
       }
     },
@@ -1333,14 +1493,14 @@ export function ChatWorkspace({
       if (!trimmed && selectedImages.length === 0 && filePreviews.length === 0) return;
       if (!currentDocumentId) return;
 
-      // Upload all images
       const imageUrls: string[] = [];
 
       if (selectedImages.length > 0) {
         setUploadingImage(true);
-        try {
-          // Upload images sequentially
-          for (const file of selectedImages) {
+        setImageUploadError(null);
+
+        for (const file of selectedImages) {
+          try {
             const formData = new FormData();
             formData.append("file", file);
             const res = await fetch("/api/chat-images", {
@@ -1352,15 +1512,15 @@ export function ChatWorkspace({
               throw new Error(data.error || "Upload failed");
             }
             imageUrls.push(data.url);
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : "Upload failed";
+            setImageUploadError(msg);
+            toast.error(msg);
+            setUploadingImage(false);
+            return;
+          } finally {
+            setUploadingImage(false);
           }
-        } catch (error) {
-          toast.error(
-            error instanceof Error ? error.message : "Upload failed",
-          );
-          setUploadingImage(false);
-          return;
-        } finally {
-          setUploadingImage(false);
         }
       }
 
@@ -1391,11 +1551,11 @@ export function ChatWorkspace({
       setSending(true);
       setHighlightPickerMessageId(null);
       setPendingSelection(null);
+      setErrorMessage(null);
 
       requestAnimationFrame(() => scrollToLatest());
 
       try {
-        // Send all image URLs to API
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1439,6 +1599,7 @@ export function ChatWorkspace({
             selectionStart: null,
             selectionEnd: null,
             createdAt: new Date().toISOString(),
+            error: null,
           },
         ]);
 
@@ -1455,24 +1616,27 @@ export function ChatWorkspace({
         requestAnimationFrame(() => scrollToLatest());
 
         if (payload.reused) {
-          toast.success("Reused a previous exact answer.");
+          toast.success("Reused a previous answer — instant response!");
         }
       } catch (error) {
         const errorMessage =
           error instanceof Error
             ? error.message
             : "Could not get an answer.";
+        setErrorMessage(errorMessage);
+
+        const assistantMessageId = createMessageId();
         setMessages((prev) => [
           ...prev,
           {
-            id: createMessageId(),
+            id: assistantMessageId,
             role: "assistant",
-            content: errorMessage,
-            highlightColor: null,
-            selectionStart: null,
-            selectionEnd: null,
+            content: "",
+            createdAt: new Date().toISOString(),
+            error: errorMessage,
           },
         ]);
+
         requestAnimationFrame(() => scrollToLatest());
       } finally {
         setSending(false);
@@ -1505,7 +1669,21 @@ export function ChatWorkspace({
     [router],
   );
 
-  // ── Highlight picker toggle ────────────────────────────────────
+  const handleExportChat = useCallback(() => {
+    if (!currentSessionId) {
+      toast.error("Start a conversation first before exporting.");
+      return;
+    }
+    const url = `/api/sessions/${currentSessionId}/export`;
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "");
+    window.document.body.appendChild(link);
+    link.click();
+    window.document.body.removeChild(link);
+    toast.success("Exporting chat...");
+  }, [currentSessionId]);
+
   const handleHighlightPickerToggle = useCallback(
     (messageId: string | null) => {
       setHighlightPickerMessageId(messageId);
@@ -1517,7 +1695,7 @@ export function ChatWorkspace({
     [],
   );
 
-  // ── Render ────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────
   return (
     <div className="flex h-full min-h-0">
       {/* ── Sidebar ───────────────────────────────────────────── */}
@@ -1525,7 +1703,6 @@ export function ChatWorkspace({
         style={{ width: sidebarWidth }}
         className="relative shrink-0 border-r border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900"
       >
-        {/* Horizontal resize handle */}
         <div
           onMouseDown={startSidebarResize}
           className="absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize opacity-0 hover:opacity-100 transition-opacity"
@@ -1534,7 +1711,6 @@ export function ChatWorkspace({
         </div>
 
         <div className="flex h-full flex-col overflow-hidden">
-          {/* New chat */}
           <div className="border-b border-stone-200 p-3 dark:border-stone-800">
             <button
               type="button"
@@ -1546,7 +1722,6 @@ export function ChatWorkspace({
             </button>
           </div>
 
-          {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto">
             {/* Documents */}
             <div className="p-3">
@@ -1575,7 +1750,7 @@ export function ChatWorkspace({
               </div>
             </div>
 
-            {/* Pinned notes — BELOW documents, above sessions */}
+            {/* Pinned notes */}
             {pinnedNotes.length > 0 && (
               <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
                 <div className="mb-1 flex items-center gap-1">
@@ -1630,7 +1805,7 @@ export function ChatWorkspace({
               </div>
             )}
 
-            {/* Sessions — pinned first */}
+            {/* Sessions */}
             {sortedSessions.length > 0 && (
               <div className="border-t border-stone-200 px-3 pt-2 dark:border-stone-800">
                 <div className="mb-1 flex items-center justify-between">
@@ -1700,7 +1875,7 @@ export function ChatWorkspace({
               </div>
             )}
 
-            {/* Notes section — unpinned only (pinned shown above) */}
+            {/* Unpinned notes */}
             {unpinnedNotes.length > 0 && (
               <div className="border-t border-stone-200 p-3 dark:border-stone-800">
                 <div className="mb-2 flex items-center justify-between">
@@ -1710,9 +1885,7 @@ export function ChatWorkspace({
                 </div>
                 <div className="space-y-1">
                   {unpinnedNotes.map((note) => {
-                    const message = messages.find(
-                      (m) => m.id === note.messageId,
-                    );
+                    const message = messages.find((m) => m.id === note.messageId);
                     if (!message) return null;
                     return (
                       <div
@@ -1769,40 +1942,92 @@ export function ChatWorkspace({
       {/* ── Chat area ─────────────────────────────────────────── */}
       <main className="flex flex-1 flex-col min-w-0">
         {/* Header */}
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50 px-4 dark:border-stone-800 dark:bg-stone-900">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-stone-200 bg-stone-50/90 px-4 dark:border-stone-800 dark:bg-stone-900/90 backdrop-blur-sm">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-200 dark:bg-stone-700">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-200 dark:bg-stone-700 shadow-sm">
               <MessageSquare className="h-4 w-4 text-stone-500 dark:text-stone-400" />
             </div>
             <div>
               <h1 className="text-sm font-medium text-stone-900 dark:text-white">
-                {selectedDocument ? "Chat" : "No Document Selected"}
+                {selectedDocument ? (
+                  <span>Chatting with <span className="text-stone-600 dark:text-stone-300">{selectedDocument.filename}</span></span>
+                ) : (
+                  "No Document Selected"
+                )}
               </h1>
-              {selectedDocument && (
-                <p className="text-xs text-stone-500 dark:text-stone-400">
-                  {selectedDocument.filename}
-                </p>
+              {currentSessionId && (
+                <div className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                    {messages.length} message{messages.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
               )}
             </div>
           </div>
 
-          <div className="ml-3 flex items-center gap-1.5">
-            <span className="text-xs text-stone-400 dark:text-stone-500">
-              Chatting with:
-            </span>
-            <select
-              value={currentDocumentId ?? ""}
-              onChange={(e) => handleDocumentChange(e.target.value)}
-              className="appearance-none cursor-pointer rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400"
-            >
-              {documents.map((doc) => (
-                <option key={doc.id} value={doc.id}>
-                  {doc.filename}
-                </option>
-              ))}
-            </select>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-stone-400 dark:text-stone-500 hidden sm:inline">Doc:</span>
+              <select
+                value={currentDocumentId ?? ""}
+                onChange={(e) => handleDocumentChange(e.target.value)}
+                className="appearance-none cursor-pointer rounded-lg border border-stone-200 bg-stone-50 px-2 py-1.5 pr-7 text-xs font-medium text-stone-600 transition-all hover:border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-200 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:focus:ring-stone-700 bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%239CA3AF%22%20stroke-width%3D%222%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat"
+              >
+                {documents.length === 0 && (
+                  <option value="">No documents</option>
+                )}
+                {documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.filename}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedDocument && (
+              <button
+                onClick={handleNewChat}
+                title="Start new chat"
+                className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-600 transition-all hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700"
+              >
+                <Plus className="h-3 w-3" />
+                <span className="hidden sm:inline">New</span>
+              </button>
+            )}
+
+            {currentSessionId && (
+              <button
+                onClick={handleExportChat}
+                title="Export conversation as Markdown"
+                className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-600 transition-all hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Export</span>
+              </button>
+            )}
           </div>
         </header>
+
+        {/* Error banner */}
+        {errorMessage && (
+          <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/40 dark:bg-red-900/20">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-800 dark:text-red-300">
+                Something went wrong
+              </p>
+              <p className="text-xs text-red-600 dark:text-red-400">{errorMessage}</p>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="shrink-0 rounded p-0.5 text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40"
+              aria-label="Dismiss error"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
         {/* Messages */}
         <div
@@ -1837,54 +2062,78 @@ export function ChatWorkspace({
               <h3 className="mb-1.5 text-base font-medium text-stone-700 dark:text-stone-100">
                 Start a conversation
               </h3>
-              <p className="mb-4 max-w-md text-sm text-stone-500 dark:text-stone-400">
+              <p className="mb-6 text-sm text-stone-500 dark:text-stone-400">
                 Ask anything about{" "}
                 <span className="font-medium text-stone-600 dark:text-stone-300">
                   {selectedDocument?.filename ?? "your document"}
                 </span>
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 max-w-sm">
                 {[
-                  "Summarize this document",
-                  "What are the key points?",
-                  "Explain in simple terms",
-                  "Find specific details",
+                  { text: "Summarize key points", q: "Summarize the key points of this document" },
+                  { text: "Explain simply", q: "Explain this in simple terms" },
+                  { text: "Find details", q: "Find specific details about" },
+                  { text: "Compare sections", q: "Compare different sections of this document" },
                 ].map((suggestion) => (
                   <button
-                    key={suggestion}
-                    onClick={() => setInput(suggestion)}
-                    className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-left text-xs text-stone-600 transition-all hover:border-stone-300 hover:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700"
+                    key={suggestion.text}
+                    onClick={() => {
+                      setInput(suggestion.q);
+                      inputRef.current?.focus();
+                    }}
+                    className="group flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-left text-xs text-stone-600 transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:shadow-sm dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 active:scale-[0.98]"
                   >
-                    {suggestion}
+                    <span className="text-base leading-none">💬</span>
+                    <span>{suggestion.text}</span>
                   </button>
                 ))}
               </div>
             </div>
           ) : (
             <div className="space-y-5">
-              {messages.map((message) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  isSaved={noteIdsMap.has(message.id)}
-                  flashedMessageId={flashedMessageId}
-                  copiedMessageId={copiedMessageId}
-                  highlightPickerOpen={
-                    highlightPickerMessageId === message.id
-                  }
-                  pendingSelection={pendingSelection}
-                  onHighlightPickerToggle={handleHighlightPickerToggle}
-                  onHighlight={handleHighlight}
-                  onCopy={copyToClipboard}
-                  onToggleNote={handleToggleNote}
-                  onDeleteMessage={handleDeleteMessage}
-                  onFlash={handleFlash}
-                  onPendingSelectionChange={setPendingSelection}
-                  onRef={(el) => {
-                    messageRefs.current[message.id] = el;
-                  }}
-                />
-              ))}
+              {messages.map((message, index) => {
+                const prevMessage = messages[index - 1];
+                const showDateSep =
+                  !prevMessage ||
+                  !message.createdAt ||
+                  !prevMessage.createdAt ||
+                  new Date(message.createdAt).toDateString() !==
+                    new Date(prevMessage.createdAt).toDateString();
+
+                return (
+                  <div key={message.id}>
+                    {showDateSep && message.createdAt && (
+                      <DateSeparator dateStr={message.createdAt} />
+                    )}
+                    <MessageBubble
+                      message={message}
+                      isSaved={noteIdsMap.has(message.id)}
+                      flashedMessageId={flashedMessageId}
+                      copiedMessageId={copiedMessageId}
+                      highlightPickerOpen={highlightPickerMessageId === message.id}
+                      pendingSelection={pendingSelection}
+                      onHighlightPickerToggle={handleHighlightPickerToggle}
+                      onHighlight={handleHighlight}
+                      onCopy={copyToClipboard}
+                      onToggleNote={handleToggleNote}
+                      onDeleteMessage={handleDeleteMessage}
+                      onRetryMessage={handleRetryMessage}
+                      onFlash={handleFlash}
+                      onPendingSelectionChange={setPendingSelection}
+                      onRef={(el) => {
+                        messageRefs.current[message.id] = el;
+                      }}
+                      onCitationClick={(idx) => {
+                        const citation = message.citations?.find(c => c.index === idx);
+                        if (citation) {
+                          navigator.clipboard.writeText(citation.snippet);
+                          toast.success("Citation copied to clipboard!");
+                        }
+                      }}
+                    />
+                  </div>
+                );
+              })}
 
               {sending && <TypingIndicator />}
             </div>
@@ -1903,156 +2152,231 @@ export function ChatWorkspace({
           </button>
         )}
 
-        {/* Vertical resize handle between messages and input */}
+        {/* Vertical resize handle */}
         <div
-          onMouseDown={startInputResize}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const container = scrollContainerRef.current;
+            if (!container) return;
+            const startY = e.clientY;
+            const startHeight = container.clientHeight;
+            const onMove = (ev: MouseEvent) => {
+              const delta = startY - ev.clientY;
+              const newH = Math.min(
+                Math.max(startHeight + delta, 200),
+                window.innerHeight * 0.7,
+              );
+              container.style.height = `${newH}px`;
+              updateScrollState();
+            };
+            const onUp = () => {
+              document.removeEventListener("mousemove", onMove);
+              document.removeEventListener("mouseup", onUp);
+            };
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
+          }}
           className="group h-2 shrink-0 cursor-row-resize flex items-center justify-center bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 transition-colors"
         >
           <div className="h-0.5 w-8 rounded-full bg-stone-300 dark:bg-stone-600 group-hover:bg-stone-400 dark:group-hover:bg-stone-500 transition-colors" />
         </div>
 
         {/* Input */}
-        <div
-          style={
-            inputAreaHeight
-              ? { height: `${inputAreaHeight}px`, flexShrink: 0 }
-              : undefined
-          }
-          className="shrink-0 border-t border-stone-200 bg-stone-100/80 p-3 dark:border-stone-800 dark:bg-stone-900/80"
-        >
-          <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-            {/* Multi-image preview */}
+        <div className="shrink-0 border-t border-stone-200 bg-stone-50/90 p-3 dark:border-stone-800 dark:bg-stone-900/90 backdrop-blur-sm">
+          <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-2">
+            {/* Image preview */}
             {imagePreviews.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800">
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white p-3 dark:border-stone-700 dark:bg-stone-800 shadow-sm">
                 {imagePreviews.map((preview, idx) => (
-                  <div key={idx} className="relative group">
+                  <div key={idx} className="relative group/image">
                     <img
                       src={preview}
                       alt={`Preview ${idx + 1}`}
-                      className="h-12 w-12 rounded-md border border-stone-200 object-cover dark:border-stone-700"
+                      className="h-14 w-14 rounded-lg border border-stone-200 object-cover transition-transform group-hover/image:scale-105 dark:border-stone-700"
                     />
-                    {uploadingImage && (
-                      <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50">
-                        <Loader2 className="h-4 w-4 animate-spin text-white" />
+                    {uploadingImage && idx === 0 && (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50">
+                        <Loader2 className="h-5 w-5 animate-spin text-white" />
                       </div>
                     )}
                     <button
                       type="button"
                       onClick={() => removeSelectedImage(idx)}
                       disabled={uploadingImage}
-                      className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white opacity-0 transition-all hover:bg-red-600 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white opacity-0 transition-all hover:bg-red-600 group-hover/image:opacity-100 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
                     >
                       <X className="h-3 w-3" />
                     </button>
                   </div>
                 ))}
-                <span className="text-xs text-stone-500">
-                  {imagePreviews.length}/5 images
-                </span>
-                {uploadingImage && (
-                  <span className="text-xs text-stone-400">Uploading...</span>
-                )}
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-stone-500">
+                    {imagePreviews.length}/5 images attached
+                  </span>
+                  {imageUploadError && (
+                    <span className="text-[10px] text-red-500">{imageUploadError}</span>
+                  )}
+                  {uploadingImage && (
+                    <span className="text-[10px] text-stone-400 animate-pulse">Uploading...</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={clearAllImages}
+                    disabled={uploadingImage}
+                    className="text-[10px] text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 disabled:opacity-50"
+                  >
+                    Clear all
+                  </button>
+                </div>
               </div>
             )}
 
             {/* File preview */}
             {filePreviews.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 dark:border-stone-700 dark:bg-stone-800">
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white p-2.5 dark:border-stone-700 dark:bg-stone-800 shadow-sm">
                 {filePreviews.map((fp, idx) => (
-                  <div key={fp.fileId} className="relative group flex items-center gap-1.5 rounded-md border border-stone-200 bg-white px-2 py-1 dark:border-stone-600 dark:bg-stone-700">
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
-                    <span className="max-w-[120px] truncate text-xs text-stone-600 dark:text-stone-300">
+                  <div
+                    key={fp.fileId}
+                    className={`relative group/file flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 ${
+                      fp.uploadError
+                        ? "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/20"
+                        : "border-stone-200 bg-stone-50 dark:border-stone-600 dark:bg-stone-700"
+                    }`}
+                  >
+                    {fp.uploading ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400 shrink-0" />
+                    ) : fp.uploadError ? (
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+                    )}
+                    <span className="max-w-[140px] truncate text-xs font-medium text-stone-600 dark:text-stone-300">
                       {fp.filename}
                     </span>
-                    {fp.uploading ? (
-                      <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                    ) : (
+                    {fp.uploading && (
+                      <span className="text-[10px] text-stone-400 animate-pulse">Uploading...</span>
+                    )}
+                    {fp.uploadError && (
+                      <span className="text-[10px] text-red-500" title={fp.uploadError}>
+                        Failed
+                      </span>
+                    )}
+                    {!fp.uploading && (
                       <button
                         type="button"
                         onClick={() => removeSelectedFile(idx)}
-                        className="flex h-4 w-4 items-center justify-center rounded text-stone-400 hover:text-red-500"
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-stone-400 opacity-0 transition-all hover:text-red-500 group-hover/file:opacity-100"
                       >
                         <X className="h-3 w-3" />
                       </button>
                     )}
                   </div>
                 ))}
-                <span className="text-xs text-stone-500">
-                  {filePreviews.length}/3 files
-                </span>
-                {uploadingFile && (
-                  <span className="text-xs text-stone-400">Processing...</span>
-                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-stone-500">{filePreviews.length}/3 files</span>
+                  <button
+                    type="button"
+                    onClick={clearAllFiles}
+                    className="text-[10px] text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
             )}
 
             <div className="flex items-center gap-2">
               {/* Image attachment */}
-              <label
-                data-testid="image-upload-label"
-                className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${
-                  !selectedDocument || sending || imagePreviews.length >= 5
-                    ? "opacity-50 cursor-not-allowed"
-                    : ""
-                }`}
-              >
-                <input
-                  data-testid="image-upload-input"
-                  type="file"
-                  accept="image/jpeg,image/png,image/gif,image/webp"
-                  multiple
-                  onChange={handleImageSelect}
-                  disabled={!selectedDocument || sending || imagePreviews.length >= 5}
-                  className="hidden"
-                />
-                <ImagePlus className="h-4 w-4" />
-              </label>
+              <div className="relative group/tooltip">
+                <label
+                  data-testid="image-upload-label"
+                  className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border text-stone-400 transition-all ${
+                    !selectedDocument || sending || imagePreviews.length >= 5
+                      ? "opacity-40 cursor-not-allowed border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-800"
+                      : "border-stone-200 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600 dark:hover:bg-stone-700"
+                  }`}
+                >
+                  <input
+                    data-testid="image-upload-input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    multiple
+                    onChange={handleImageSelect}
+                    disabled={!selectedDocument || sending || imagePreviews.length >= 5}
+                    className="hidden"
+                  />
+                  <ImagePlus className="h-4 w-4" />
+                </label>
+                <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-stone-900 px-2 py-1 text-[10px] text-white opacity-0 pointer-events-none transition-opacity group-hover/tooltip:opacity-100 shadow-lg z-20">
+                  Add image ({imagePreviews.length}/5)
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-stone-900" />
+                </div>
+              </div>
 
               {/* File attachment */}
-              <label
-                className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-400 transition-all hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:hover:bg-stone-700 ${
-                  !selectedDocument || sending || filePreviews.length >= 3
-                    ? "opacity-50 cursor-not-allowed"
-                    : ""
-                }`}
-              >
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf,.docx,.doc,.txt,.md,.csv"
-                  multiple
-                  onChange={handleFileSelect}
-                  disabled={!selectedDocument || sending || filePreviews.length >= 3}
-                  className="hidden"
-                />
-                <FileText className="h-4 w-4" />
-              </label>
+              <div className="relative group/tooltip">
+                <label
+                  className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border text-stone-400 transition-all ${
+                    !selectedDocument || sending || filePreviews.length >= 3
+                      ? "opacity-40 cursor-not-allowed border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-800"
+                      : "border-stone-200 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600 dark:hover:bg-stone-700"
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="application/pdf,.pdf,.docx,.doc,.txt,.md,.csv"
+                    multiple
+                    onChange={handleFileSelect}
+                    disabled={!selectedDocument || sending || filePreviews.length >= 3}
+                    className="hidden"
+                  />
+                  <FileText className="h-4 w-4" />
+                </label>
+                <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-stone-900 px-2 py-1 text-[10px] text-white opacity-0 pointer-events-none transition-opacity group-hover/tooltip:opacity-100 shadow-lg z-20">
+                  Add file ({filePreviews.length}/3)
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-stone-900" />
+                </div>
+              </div>
 
               {/* Text input */}
               <input
+                ref={inputRef}
                 data-testid="chat-input"
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    formRef.current?.requestSubmit();
+                  }
+                }}
                 placeholder={
                   selectedDocument
                     ? `Ask about ${selectedDocument.filename}...`
                     : "Select a document to start..."
                 }
                 disabled={!selectedDocument || sending}
-                className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:text-white dark:placeholder:text-stone-500 dark:focus:border-stone-600 dark:focus:ring-stone-700"
+                className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:text-white dark:placeholder:text-stone-500 dark:focus:border-stone-600 dark:focus:ring-stone-700 transition-shadow"
               />
 
-              {/* Send */}
+              {input.length > 0 && (
+                <span className={`shrink-0 text-[10px] ${input.length > 900 ? "text-amber-500" : "text-stone-400"}`}>
+                  {input.length}/1000
+                </span>
+              )}
+
               <button
                 type="submit"
                 disabled={
                   (!input.trim() && imagePreviews.length === 0 && filePreviews.length === 0) ||
                   !selectedDocument ||
                   sending ||
+                  sending ||
                   uploadingImage ||
-                  uploadingFile
+                  (filePreviews.length > 0 && filePreviews.some(fp => fp.uploading))
                 }
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white transition-all hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-stone-700 dark:hover:bg-stone-600"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white transition-all duration-200 hover:bg-stone-800 hover:scale-105 hover:shadow-md active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-primary dark:hover:bg-primary-hover"
               >
                 {sending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
