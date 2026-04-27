@@ -1,9 +1,11 @@
 /**
  * In-Memory L1 Cache for QA Cache
- * 
+ *
  * Provides sub-millisecond cache lookups with LRU eviction and TTL support.
  * This is a module-level singleton that persists across requests in the same server instance.
  */
+
+import { type ChunkMetadata } from "@/types";
 
 type CacheEntry<T> = {
   value: T;
@@ -182,6 +184,7 @@ type ChunkCacheEntry = {
   chunkIndex: number;
   content: string;
   embedding: number[];
+  metadata?: ChunkMetadata;
 };
 
 // Singleton for document chunks cache

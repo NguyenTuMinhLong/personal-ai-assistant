@@ -2,6 +2,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "crypto";
 import { embed } from "ai";
+import { ChunkMetadata } from "@/types";
 
 import { getSupabaseUrl } from "@/lib/supabase";
 import { getEmbeddingModel } from "@/lib/ai";
@@ -36,6 +37,7 @@ export type FileChunk = {
   index: number;
   content: string;
   embedding: number[];
+  metadata?: ChunkMetadata;
 };
 
 export type StoredFileCache = {

@@ -3,7 +3,9 @@ import { embed, generateText, type UserModelMessage } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
-import { getUserDocument, listDocumentEmbeddings } from "@/lib/documents";
+import { hybridSearch } from "@/lib/hybrid-search";
+import { buildContext } from "@/lib/context-builder";
+import { getUserDocument } from "@/lib/documents";
 import {
   findCachedAnswer,
   type CachedCitation,
@@ -20,7 +22,6 @@ import {
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
 import {
-  getFileCache,
   searchFileChunks,
 } from "@/lib/file-cache";
 
@@ -32,63 +33,6 @@ type RequestBody = {
   chatFiles?: Array<{ fileId: string; filename: string; mimeType: string; storageUrl: string; fileSize: number; extractedText?: string | null }>;
   sessionId?: string;
 };
-
-type EmbeddingRow = {
-  chunkIndex: number;
-  content: string;
-  embedding: unknown;
-};
-
-function parseEmbedding(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is number => typeof item === "number");
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is number => typeof item === "number");
-      }
-    } catch {}
-  }
-
-  return [];
-}
-
-function cosineSimilarity(a: number[], b: number[]) {
-  if (!a.length || !b.length || a.length !== b.length) {
-    return -1;
-  }
-
-  let dotProduct = 0;
-  let magnitudeA = 0;
-  let magnitudeB = 0;
-
-  for (let index = 0; index < a.length; index += 1) {
-    dotProduct += a[index] * b[index];
-    magnitudeA += a[index] * a[index];
-    magnitudeB += b[index] * b[index];
-  }
-
-  if (!magnitudeA || !magnitudeB) {
-    return -1;
-  }
-
-  return dotProduct / (Math.sqrt(magnitudeA) * Math.sqrt(magnitudeB));
-}
-
-function rankChunks(rows: EmbeddingRow[], queryEmbedding: number[]) {
-  return rows
-    .map((row) => ({
-      ...row,
-      score: cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding)),
-    }))
-    .filter((row) => row.score >= 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4);
-}
 
 function toUICitations(citations: CachedCitation[]) {
   return citations.map((citation, index) => ({
@@ -219,10 +163,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Context size limits to save tokens
-    const MAX_CONTEXT_CHARS = 3000;
-    const MAX_CONTEXT_CHARS_WITH_IMAGE = 2000;
+    const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS ?? "", 10) || 3000;
+    const MAX_CONTEXT_CHARS_WITH_IMAGE = parseInt(process.env.MAX_CONTEXT_CHARS_WITH_IMAGE ?? "", 10) || 2000;
+    const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? "", 10) || 8;
 
-    const rows = await listDocumentEmbeddings(documentId);
     let citations: Array<{ index: number; snippet: string }> = [];
     let context = "";
 
@@ -234,20 +178,14 @@ export async function POST(req: NextRequest) {
       const cached = getCachedImageAnalysis(imageUrl);
 
       if (cached && !cached.isRelated) {
-        // Image was previously analyzed as unrelated - skip AI vision entirely
         console.log("Image cached as unrelated, skipping AI vision");
         shouldProcessImage = false;
       } else if (cached && cached.isRelated) {
-        // Image was previously analyzed as related - use cache hint
         console.log("Image cached as related:", cached.description.slice(0, 50));
-        // Still process it since it's related
       } else {
-        // No cache - check if user is actually asking about the image
         const questionLower = (message ?? "").toLowerCase();
         const imageKeywords = ["image", "picture", "photo", "screenshot", "this", "what is", "show", "see", "look"];
         const seemsAskingAboutImage = imageKeywords.some(k => questionLower.includes(k));
-
-        // If user is NOT asking about the image and no cache, skip AI vision
         if (!seemsAskingAboutImage) {
           console.log("User not asking about image, skipping AI vision");
           shouldProcessImage = false;
@@ -255,40 +193,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (rows.length > 0) {
-      const { embedding: queryEmbedding } = await embed({
-        model: getEmbeddingModel(),
-        value: message,
+    // Get query embedding
+    const { embedding: queryEmbedding } = await embed({
+      model: getEmbeddingModel(),
+      value: message,
+    });
+
+    // Hybrid search: BM25 + vector similarity with RRF fusion
+    const topChunks = await hybridSearch({
+      query: message,
+      queryEmbedding,
+      documentId,
+      topK: RAG_TOP_K,
+    });
+
+    if (topChunks.length > 0) {
+      const { context: builtContext, citations: builtCitations } = buildContext(topChunks, {
+        maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
+        includeMetadata: true,
+        compressMode: "smart_truncate",
       });
 
-      const topChunks = rankChunks(rows, queryEmbedding);
-
-      if (topChunks.length > 0) {
-        citations = topChunks.map((chunk, index) => ({
-          index: index + 1,
-          snippet: chunk.content.slice(0, 280),
-        }));
-
-        // Build context with chunk limit based on image presence
-        const maxChars = shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS;
-        const chunkTexts = topChunks.map((chunk, index) => `[${index + 1}] ${chunk.content}`);
-        let builtContext = "";
-        for (const chunkText of chunkTexts) {
-          if ((builtContext + chunkText + "\n\n").length > maxChars) break;
-          builtContext += chunkText + "\n\n";
-        }
-        context = builtContext.trim();
-      }
+      context = builtContext;
+      citations = builtCitations.map((c, idx) => ({
+        index: idx + 1,
+        snippet: c.snippet,
+      }));
+    } else {
+      context = "";
     }
-
-    // If no embeddings found, do NOT fallback to full document content
-  // Just use empty context - the question will be answered based on general knowledge
-  // This prevents burning tokens on unrelated full document content
-  if (citations.length === 0) {
-    // No relevant content found - AI will answer from its knowledge
-    // Only include filename for reference
-    context = "";
-  }
 
   // ── Build file context from attached files ───────────────────
   // extractedText is already provided from the upload response.

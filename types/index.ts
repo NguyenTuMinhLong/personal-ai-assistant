@@ -70,3 +70,26 @@ export type MessageAnnotation = {
 };
 
 export type HighlightColor = "rose" | "amber" | "emerald" | "sky" | "violet";
+
+// ==================== RAG Infrastructure Types ====================
+
+export type ChunkMetadata = {
+  title?: string;
+  section?: string;
+  pageNumber?: number;
+  chunkType: "paragraph" | "sentence" | "fixed";
+};
+
+export type SearchResult = {
+  chunkIndex: number;
+  content: string;
+  metadata: ChunkMetadata;
+  score: number;
+  source: "document" | "file";
+};
+
+export type MetadataFilters = {
+  section?: string;
+  pageNumber?: number;
+  chunkType?: string;
+};

@@ -17,6 +17,7 @@ type DocumentEmbeddingRow = {
   chunk_index: number;
   content: string;
   embedding: unknown;
+  metadata?: unknown;
 };
 
 function createSupabaseAdminClient() {
@@ -81,7 +82,7 @@ export async function listDocumentEmbeddings(documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("document_embeddings")
-    .select("chunk_index, content, embedding")
+    .select("chunk_index, content, embedding, metadata")
     .eq("document_id", documentId);
 
   if (error) {
@@ -89,14 +90,14 @@ export async function listDocumentEmbeddings(documentId: string) {
     throw new Error(error.message || "Could not load document embeddings.");
   }
 
-  // Map snake_case to camelCase for internal use
   const chunks = (data ?? []).map(row => ({
     chunkIndex: row.chunk_index,
     content: row.content,
     embedding: row.embedding,
+    metadata: row.metadata ?? { chunkType: "fixed" },
   }));
   setCachedChunks(documentId, chunks);
-  
+
   return chunks;
 }
 

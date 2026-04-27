@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { getSupabaseUrl } from "@/lib/supabase";
+import { semanticChunk } from "@/lib/chunking";
 
 type UploadResult = {
   id: string;
@@ -190,27 +191,38 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const chunks = text.match(/[\s\S]{1,800}/g) ?? [];
+      const { chunks: semanticChunks } = await semanticChunk(text, {
+        maxChunkTokens: 512,
+        overlapTokens: 64,
+        filename: file.name,
+        chunkType: "document",
+      });
 
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunk = chunks[i].trim();
+      for (let i = 0; i < semanticChunks.length; i += 1) {
+        const chunk = semanticChunks[i];
+        const content = chunk.content.trim();
 
-        if (!chunk) {
+        if (!content) {
           continue;
         }
 
         const { embedding } = await embed({
           model: embeddingModel,
-          value: chunk,
+          value: content,
         });
 
         const { error: embeddingError } = await supabase
           .from("document_embeddings")
           .insert({
             document_id: doc.id,
-            content: chunk,
+            content,
             chunk_index: i,
             embedding,
+            metadata: chunk.metadata,
+            title: chunk.metadata.title ?? null,
+            section: chunk.metadata.section ?? null,
+            page_number: chunk.metadata.pageNumber ?? null,
+            chunk_type: chunk.metadata.chunkType,
           });
 
         if (embeddingError) {

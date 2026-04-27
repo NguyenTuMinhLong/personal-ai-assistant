@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getSupabaseUrl } from "@/lib/supabase";
+import { semanticChunk } from "@/lib/chunking";
 import {
   generateFileId,
   upsertFileCache,
@@ -167,24 +168,19 @@ export async function POST(req: NextRequest) {
     const extractedText = await extractText(file);
     const chunks: FileChunk[] = [];
     if (extractedText.trim()) {
-      const rawChunks: FileChunk[] = [];
-      const CHUNK_SIZE = 600;
-      const OVERLAP = 80;
-      let start = 0;
-      let idx = 0;
-      while (start < extractedText.length) {
-        let end = start + CHUNK_SIZE;
-        if (end < extractedText.length) {
-          const bp = extractedText.lastIndexOf("\n", end);
-          if (bp > start + CHUNK_SIZE / 2) end = bp;
-        }
-        const content = extractedText.slice(start, end).trim();
-        if (content) rawChunks.push({ index: idx++, content, embedding: [] });
-        start = end - OVERLAP;
-        if (rawChunks.length > 0 && start <= rawChunks[rawChunks.length - 1].content.length) {
-          start = end;
-        }
-      }
+      const { chunks: semanticChunks } = await semanticChunk(extractedText, {
+        maxChunkTokens: 512,
+        overlapTokens: 64,
+        filename: file.name,
+        chunkType: "file",
+      });
+
+      const rawChunks: FileChunk[] = semanticChunks.map((chunk, idx) => ({
+        index: idx,
+        content: chunk.content,
+        embedding: [],
+        metadata: chunk.metadata,
+      }));
 
       try {
         chunks.push(...(await embedFileChunks(rawChunks)));
