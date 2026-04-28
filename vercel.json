@@ -27,7 +27,7 @@
       ]
     }
   ],
-  "regions": ["sin1", "iad1"],
+  "regions": ["sin1"],
   "crons": [],
   "functions": {
     "app/api/chat/route.ts": {
