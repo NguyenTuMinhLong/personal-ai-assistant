@@ -1,7 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
-import { createSupabaseServerClient } from "@/lib/supabase";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,7 +12,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   // Helper: safe count that returns 0 if table doesn't exist
   async function safeCount(query: ReturnType<typeof supabase.from>) {
@@ -179,7 +179,7 @@ export async function GET() {
 
 // Server-side helper: track a usage event
 export async function trackEvent(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  supabase: ReturnType<typeof import("@/lib/supabase").createSupabaseAdminClient>,
   userId: string,
   eventType: string,
   eventData: Record<string, unknown> = {}

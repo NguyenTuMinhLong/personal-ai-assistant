@@ -13,7 +13,7 @@ import {
   saveMessage,
   touchChatSession,
 } from "@/lib/sessions";
-import { createSupabaseServerClient } from "@/lib/supabase";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 
 // ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
@@ -94,7 +94,7 @@ function buildSystemPrompt(
 
 // ─── Track stream event (fire-and-forget) ─────────────────────────────────────
 function trackStreamEvent(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
   userId: string,
   eventType: string,
   eventData: Record<string, unknown>,
@@ -264,7 +264,7 @@ ${context}`,
   });
 
   // ── Track query event (fire-and-forget, never blocks the response) ──
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
   trackStreamEvent(supabase, user.id, "query", {
     documentId,
     sessionId,

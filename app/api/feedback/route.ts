@@ -1,7 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
-import { createSupabaseServerClient } from "@/lib/supabase";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "messageId is required." }, { status: 400 });
   }
 
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("message_feedback")
     .select("id, vote, created_at, updated_at")
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "vote must be 'up' or 'down'." }, { status: 400 });
   }
 
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   // Try to upsert with the unique constraint on (message_id, user_id)
   // If the table doesn't have the constraint yet, fall back to insert/update
@@ -132,7 +132,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "messageId is required." }, { status: 400 });
   }
 
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
   const { error } = await supabase
     .from("message_feedback")
     .delete()

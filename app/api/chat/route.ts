@@ -21,14 +21,14 @@ import {
   getCachedImageAnalysis,
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
-import { createSupabaseServerClient } from "@/lib/supabase";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import {
   searchFileChunks,
 } from "@/lib/file-cache";
 
 // ─── Analytics helper ──────────────────────────────────────────
 async function trackEvent(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
   userId: string,
   eventType: string,
   eventData: Record<string, unknown> = {}
@@ -206,7 +206,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const supabase = await createSupabaseServerClient();
+  const supabase = createSupabaseAdminClient();
 
   let body: RequestBody;
 
