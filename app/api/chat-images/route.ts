@@ -75,7 +75,8 @@ export async function POST(req: NextRequest) {
     }
 
     const fileExtension = file.name.split(".").pop()?.toLowerCase() || "";
-    if (!ALLOWED_EXTENSIONS.has(fileExtension)) {
+    const ext = (fileExtension || "") as "jpg" | "jpeg" | "png" | "gif" | "webp";
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
       return createErrorResponse(
         `Invalid file extension ".${fileExtension}". Allowed: ${[...ALLOWED_EXTENSIONS].join(", ")}.`,
         400,
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const safeExtension = ALLOWED_EXTENSIONS.has(fileExtension) ? fileExtension : "jpg";
+    const fileExt = ALLOWED_EXTENSIONS.has(ext) ? ext : "jpg";
     const sanitizedName = file.name
       .replace(/[^a-zA-Z0-9.-]/g, "_")
       .slice(0, 100);
@@ -159,7 +160,7 @@ export async function POST(req: NextRequest) {
           requestId,
         );
       }
-      if (error.statusCode === 409 || error.message?.includes("already exists")) {
+      if (error.statusCode === "409" || error.message?.includes("already exists")) {
         const { data: existing } = supabase.storage
           .from(BUCKET_NAME)
           .getPublicUrl(fileName);

@@ -14,6 +14,10 @@ import {
   touchChatSession,
 } from "@/lib/sessions";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import {
+  getCachedImageAnalysis,
+  setCachedImageAnalysis,
+} from "@/lib/cache/in-memory-cache";
 
 // ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
@@ -37,6 +41,7 @@ const MAX_MESSAGE_LENGTH = 2000;
 const MAX_FILE_CHARS = 2500;
 const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? "", 10) || 8;
 const MAX_CONTEXT_CHARS = parseInt(process.env.MAX_CONTEXT_CHARS ?? "", 10) || 3000;
+const MAX_CONTEXT_CHARS_WITH_IMAGE = parseInt(process.env.MAX_CONTEXT_CHARS_WITH_IMAGE ?? "", 10) || 2000;
 
 // ─── Constants ──────────────────────────────────────────────────
 const VIETNAMESE_REGEX = /[ăâđêôơưáàảãạấầẩẫậắằẳẳặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i;
@@ -58,15 +63,17 @@ function sanitizeFilename(name: string): string {
 function buildSystemPrompt(
   lang: "vi" | "en",
   options: {
+    shouldProcessImage: boolean;
     hasContext: boolean;
     hasFileContext: boolean;
     hasFiles: boolean;
+    imageUrl?: string;
     documentFilename: string;
     chatFileCount?: number;
     chatFileNames?: string[];
   },
 ): string {
-  const { hasContext, hasFileContext, hasFiles, documentFilename, chatFileCount, chatFileNames } = options;
+  const { shouldProcessImage, hasContext, hasFileContext, hasFiles, imageUrl, documentFilename, chatFileCount, chatFileNames } = options;
   const ctx = hasContext || hasFileContext;
   const vi = lang === "vi";
 
@@ -74,10 +81,48 @@ function buildSystemPrompt(
     ? (vi ? "\n\nVới các file đính kèm, hãy dùng citations kiểu [F1.1] cho file 1 đoạn 1." : "\n\nFor attached files, use citations like [F1.1] for file 1 chunk 1.")
     : "";
 
+  if (imageUrl && !shouldProcessImage) {
+    return `Bạn đang trả lời câu hỏi cho người dùng. Họ có gửi kèm 1 ảnh không liên quan nhưng đang hỏi về tài liệu "${documentFilename}".${hasFiles ? " Họ cũng attach thêm files." : ""}
+
+Trả lời THÂN THIỆN, TỰ NHIÊN bằng tiếng Việt:
+- Bắt đầu bằng 1 câu châm chích vui về ảnh random (ví dụ: "Ảnh đẹp đấy!", "Bé này dễ thương ghê", ":D")
+- Rồi QUAY VỀ trả lời câu hỏi chính dựa trên context
+- Nói chuyện như đang chat với bạn, KHÔNG formal
+- Đừng nói "dựa trên context" hay "theo như tài liệu" - nói tự nhiên thôi`;
+  }
+
+  if (shouldProcessImage) {
+    if (ctx) {
+      return vi
+        ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? ", các file đính kèm" : ""} và hình ảnh (nếu có). Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}
+
+Nếu có hình ảnh kèm theo:
+- Phân tích hình ảnh cẩn thận nếu nó liên quan đến câu hỏi.
+- Nếu hình ảnh không liên quan đến tài liệu, hãy nói: "Tôi nhận thấy hình ảnh này có vẻ không liên quan đến tài liệu. Tôi sẵn sàng giúp nếu bạn có câu hỏi về ${documentFilename}."`
+        : `Answer questions in English using the provided document context${hasFiles ? ", attached files" : ""} and any images provided. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${citeNote}
+
+If an image is provided:
+- Analyze the image carefully if it's relevant to the question.
+- If the image appears unrelated to the document, mention: "I notice this image doesn't seem related to the document. I'm happy to help if you have questions about ${documentFilename}."`;
+    } else {
+      return vi
+        ? `Người dùng đã upload một hình ảnh liên quan đến "${documentFilename}" nhưng không tìm thấy nội dung văn bản cụ thể trong tài liệu.${hasFiles ? " Họ cũng đính kèm các file - hãy đọc chúng để trả lời câu hỏi." : ""}
+
+Hãy phân tích hình ảnh và trả lời câu hỏi của người dùng bằng tiếng Việt. Hãy hữu ích và ngắn gọn. Nếu bạn không thể xác định câu trả lời chỉ từ hình ảnh, hãy nói rõ điều đó.`
+        : `A user has uploaded an image related to "${documentFilename}" but no specific text content was found in the document.${hasFiles ? " They also attached files - read them to answer the question." : ""}
+
+Analyze the image and answer the user's question in English. Be helpful and concise. If you cannot determine the answer from the image alone, say so.`;
+    }
+  }
+
   if (ctx) {
     return vi
-      ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? " và các file đính kèm" : ""}. Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}`
-      : `Answer questions in English using the provided document context${hasFiles ? " and attached files" : ""}. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${citeNote}`;
+      ? `Trả lời câu hỏi bằng tiếng Việt, sử dụng ngữ cảnh tài liệu được cung cấp${hasFiles ? " và các file đính kèm" : ""}. Hãy hữu ích và ngắn gọn. Nếu câu trả lời không được hỗ trợ bởi ngữ cảnh, hãy nói rõ điều đó. Khi có thể, hãy đề cập citations như [1] hoặc [2] trong câu trả lời.${citeNote}
+
+Lưu ý: Nếu có hình ảnh được đính kèm nhưng bạn không được yêu cầu phân tích, chỉ cần trả lời dựa trên tài liệu. Bạn có thể đề cập ngắn gọn nếu hình ảnh có vẻ hoàn toàn không liên quan đến ${documentFilename}.`
+      : `Answer questions in English using the provided document context${hasFiles ? " and attached files" : ""}. Be helpful and concise. If the answer is not supported by the context, say that clearly. When possible, mention citations like [1] or [2] inline.${citeNote}
+
+Note: If an image was attached but you're not asked to analyze it, just answer the question based on the document. You may briefly note if the image seems completely unrelated to ${documentFilename}.`;
   }
 
   if (hasFiles) {
@@ -132,6 +177,8 @@ export async function POST(req: NextRequest) {
   }
 
   const message = body.message?.trim() ?? "";
+  const imageUrl = body.imageUrl?.trim() || undefined;
+  const imageUrls = body.imageUrls?.filter(Boolean).map(u => u.trim()) || undefined;
   const chatFiles = body.chatFiles || undefined;
   const documentId = body.documentId?.trim();
   const incomingSessionId = body.sessionId?.trim();
@@ -171,8 +218,31 @@ export async function POST(req: NextRequest) {
 
   // ── Save user message ─────────────────────────────────────────
   if (sessionId) {
-    await saveMessage(sessionId, "user", message, []);
+    const allImageUrls = imageUrls && imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : undefined);
+    await saveMessage(sessionId, "user", message, [], allImageUrls, chatFiles);
     await touchChatSession(sessionId);
+  }
+
+  // ── Smart image handling ─────────────────────────────────────
+  let shouldProcessImage = !!imageUrl;
+
+  if (imageUrl) {
+    const cached = getCachedImageAnalysis(imageUrl);
+
+    if (cached && !cached.isRelated) {
+      console.log(`[${requestId}] Image cached as unrelated, skipping AI vision`);
+      shouldProcessImage = false;
+    } else if (cached && cached.isRelated) {
+      console.log(`[${requestId}] Image cached as related:`, cached.description.slice(0, 50));
+    } else {
+      const questionLower = (message ?? "").toLowerCase();
+      const imageKeywords = ["image", "picture", "photo", "screenshot", "this", "what is", "show", "see", "look", "ảnh", "hình"];
+      const seemsAskingAboutImage = imageKeywords.some(k => questionLower.includes(k));
+      if (!seemsAskingAboutImage) {
+        console.log(`[${requestId}] User not asking about image, skipping AI vision`);
+        shouldProcessImage = false;
+      }
+    }
   }
 
   // ── RAG: hybrid search ───────────────────────────────────────
@@ -191,7 +261,7 @@ export async function POST(req: NextRequest) {
   let context = "";
   if (topChunks.length > 0) {
     const { context: builtContext } = buildContext(topChunks, {
-      maxChars: MAX_CONTEXT_CHARS,
+      maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
       includeMetadata: true,
       compressMode: "smart_truncate",
     });
@@ -239,9 +309,25 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Build prompt ──────────────────────────────────────────────
-  const promptContent: UserModelMessage = {
-    role: "user",
-    content: `Document name: ${document.filename}
+  let promptContent: UserModelMessage;
+
+  if (shouldProcessImage && imageUrl) {
+    try {
+      const imageRes = await fetch(imageUrl);
+      if (!imageRes.ok) {
+        throw new Error(`Failed to fetch image: ${imageRes.status}`);
+      }
+      const imageBuffer = await imageRes.arrayBuffer();
+      const base64 = Buffer.from(imageBuffer).toString("base64");
+      const mimeType = imageRes.headers.get("content-type") || "image/jpeg";
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+
+      promptContent = {
+        role: "user",
+        content: [
+          {
+            type: "text" as const,
+            text: `Document name: ${document.filename}
 ${fileContext ? `\nAttached files:\n${fileContext}` : ""}
 
 Question:
@@ -249,15 +335,48 @@ ${message}
 
 Context:
 ${context}`,
-  };
+          },
+          { type: "image" as const, image: dataUrl },
+        ],
+      };
+    } catch (fetchError) {
+      console.warn(`[${requestId}] Failed to fetch image for AI vision, proceeding without image:`, fetchError);
+      shouldProcessImage = false;
+      promptContent = {
+        role: "user",
+        content: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
+
+Question:
+${message}
+
+Context:
+${context}`,
+      };
+    }
+  } else {
+    promptContent = {
+      role: "user",
+      content: `Document name: ${document.filename}
+${fileContext ? `\nAttached files:\n${fileContext}` : ""}
+
+Question:
+${message}
+
+Context:
+${context}`,
+    };
+  }
 
   const lang = detectLanguage(message);
   const hasFiles = !!(chatFiles && chatFiles.length > 0);
 
   const systemPrompt = buildSystemPrompt(lang, {
+    shouldProcessImage,
     hasContext: !!context,
     hasFileContext: !!fileContext,
     hasFiles,
+    imageUrl,
     documentFilename: document.filename,
     chatFileCount: chatFiles?.length,
     chatFileNames: chatFiles?.map(f => f.filename),
@@ -270,6 +389,7 @@ ${context}`,
     sessionId,
     contextUsed: !!context,
     hasFiles,
+    imageProcessed: shouldProcessImage,
   });
 
   // ── Save assistant message placeholder to get DB ID ───────────
@@ -280,7 +400,7 @@ ${context}`,
 
   // ── Stream via SSE ─────────────────────────────────────────────
   const result = streamText({
-    model: getChatModel(false),
+    model: getChatModel(shouldProcessImage),
     system: systemPrompt,
     messages: [promptContent],
   });
@@ -310,6 +430,10 @@ ${context}`,
           );
         }
         if (event.type === "finish") {
+          // Cache image processing decision (not the full text, since we stream)
+          if (imageUrl && !getCachedImageAnalysis(imageUrl)) {
+            setCachedImageAnalysis(imageUrl, shouldProcessImage ? "image processed" : "image skipped", shouldProcessImage);
+          }
           controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
           controller.close();
           return;

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-DNS-Prefetch-Control",
+          "value": "on"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
+        }
+      ]
+    }
+  ],
+  "regions": ["sin1", "iad1"],
+  "crons": [],
+  "functions": {
+    "app/api/chat/route.ts": {
+      "memory": 512,
+      "maxDuration": 30
+    },
+    "app/api/chat/stream/route.ts": {
+      "memory": 512,
+      "maxDuration": 60
+    },
+    "app/api/upload/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
+}

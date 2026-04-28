@@ -13,21 +13,24 @@ export async function GET() {
   }
 
   const supabase = createSupabaseAdminClient();
+  const userId = user.id;
 
   // Helper: safe count that returns 0 if table doesn't exist
-  async function safeCount(query: ReturnType<typeof supabase.from>) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function safeCount(queryBuilder: any) {
     try {
-      const result = await query;
-      return result.count ?? 0;
+      const result = await queryBuilder;
+      return (result as { count: number | null }).count ?? 0;
     } catch {
       return 0;
     }
   }
 
   // Helper: safe query that returns [] if table doesn't exist
-  async function safeData(query: ReturnType<typeof supabase.from>) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function safeData<T>(queryBuilder: any): Promise<T[]> {
     try {
-      const result = await query;
+      const result = await queryBuilder;
       return result.data ?? [];
     } catch {
       return [];
@@ -40,7 +43,7 @@ export async function GET() {
       const sessions = await supabase
         .from("chat_sessions")
         .select("id")
-        .eq("user_id", user.id);
+        .eq("user_id", userId);
       const ids = sessions.data?.map((s) => s.id) ?? [];
       if (ids.length === 0) return 0;
       const msgs = await supabase
@@ -69,48 +72,48 @@ export async function GET() {
       supabase
         .from("usage_events")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("event_type", "query")
     ),
     safeCount(
       supabase
         .from("documents")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .is("deleted_at", null)
     ),
     safeCount(
       supabase
         .from("chat_sessions")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
     ),
     getMessageCount(),
     safeCount(
       supabase
         .from("message_feedback")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
     ),
     safeCount(
       supabase
         .from("message_feedback")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("vote", "up")
     ),
     safeCount(
       supabase
         .from("message_feedback")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("vote", "down")
     ),
     safeData(
       supabase
         .from("usage_events")
         .select("event_type, created_at")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .gte("created_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
         .order("created_at", { ascending: true })
     ),
@@ -118,7 +121,7 @@ export async function GET() {
       supabase
         .from("usage_events")
         .select("event_type, event_data, created_at")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("event_type", "query")
         .order("created_at", { ascending: false })
         .limit(50)
