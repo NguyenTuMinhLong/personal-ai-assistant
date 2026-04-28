@@ -1,9 +1,9 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { createClient } from "@supabase/supabase-js";
-import { embed, generateText } from "ai";
+import { generateText } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 
-import { getChatModel, getEmbeddingModel } from "@/lib/ai";
+import { getChatModel, batchEmbed } from "@/lib/ai";
 import { getSupabaseUrl } from "@/lib/supabase";
 import { semanticChunk } from "@/lib/chunking";
 
@@ -102,7 +102,6 @@ export async function POST(req: NextRequest) {
   const user = await currentUser();
   const supabaseUrl = getSupabaseUrl();
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const embeddingModel = getEmbeddingModel();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -198,35 +197,42 @@ export async function POST(req: NextRequest) {
         chunkType: "document",
       });
 
-      for (let i = 0; i < semanticChunks.length; i += 1) {
-        const chunk = semanticChunks[i];
-        const content = chunk.content.trim();
-
-        if (!content) {
-          continue;
+      // Batch embedding: collect all non-empty chunks and embed in one API call
+      const validChunks: Array<{ index: number; content: string; chunk: typeof semanticChunks[0] }> = [];
+      for (let i = 0; i < semanticChunks.length; i++) {
+        const content = semanticChunks[i].content.trim();
+        if (content) {
+          validChunks.push({ index: i, content, chunk: semanticChunks[i] });
         }
+      }
 
-        const { embedding } = await embed({
-          model: embeddingModel,
-          value: content,
+      if (validChunks.length > 0) {
+        // Batch embed all chunks using parallel API calls (much faster than sequential)
+        const chunkTexts = validChunks.map(c => c.content);
+        const embeddings = await batchEmbed(chunkTexts, {
+          batchSize: 100,
+          concurrency: 5,
         });
+
+        // Build embedding rows for batch insert
+        const embeddingRows = validChunks.map((c, idx) => ({
+          document_id: doc.id,
+          content: c.content,
+          chunk_index: c.index,
+          embedding: embeddings[idx],
+          metadata: c.chunk.metadata,
+          title: c.chunk.metadata.title ?? null,
+          section: c.chunk.metadata.section ?? null,
+          page_number: c.chunk.metadata.pageNumber ?? null,
+          chunk_type: c.chunk.metadata.chunkType,
+        }));
 
         const { error: embeddingError } = await supabase
           .from("document_embeddings")
-          .insert({
-            document_id: doc.id,
-            content,
-            chunk_index: i,
-            embedding,
-            metadata: chunk.metadata,
-            title: chunk.metadata.title ?? null,
-            section: chunk.metadata.section ?? null,
-            page_number: chunk.metadata.pageNumber ?? null,
-            chunk_type: chunk.metadata.chunkType,
-          });
+          .insert(embeddingRows);
 
         if (embeddingError) {
-          console.error("Embedding insert error:", file.name, embeddingError);
+          console.error("Embedding batch insert error:", file.name, embeddingError);
           throw new Error(formatSupabaseError(embeddingError, supabaseUrl));
         }
       }

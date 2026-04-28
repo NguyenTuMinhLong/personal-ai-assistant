@@ -122,6 +122,10 @@ type VectorRow = {
   source: "document" | "file";
 };
 
+type ScoredVectorRow = VectorRow & {
+  score: number;
+};
+
 /**
  * Hybrid search combining BM25 + vector similarity with RRF fusion.
  */
@@ -148,7 +152,8 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Search
       .select("chunk_index, content, metadata, ts_rank(to_tsvector('english', content), plainto_tsquery('english', $1)) as bm25_score")
       .textSearch("content", query, { type: "websearch" })
       .order("bm25_score", { ascending: false })
-      .limit(topK * 3);
+      .limit(topK * 3)
+      .is("deleted_at", null);
 
     if (documentId) {
       queryBuilder = queryBuilder.eq("document_id", documentId);
@@ -168,7 +173,8 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Search
     let queryBuilder = supabase
       .from("document_embeddings")
       .select("chunk_index, content, metadata, embedding")
-      .limit(topK * 3);
+      .limit(topK * 3)
+      .is("deleted_at", null);
 
     if (documentId) {
       queryBuilder = queryBuilder.eq("document_id", documentId);
@@ -177,7 +183,13 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Search
     const { data, error } = await queryBuilder;
 
     if (!error && data) {
-      vectorRows = (data as VectorRow[]).map((row) => ({
+      vectorRows = (data as unknown as Array<{
+        document_id: string;
+        chunk_index: number;
+        content: string;
+        metadata: unknown;
+        embedding: unknown;
+      }>).map((row) => ({
         ...row,
         source: "document" as const,
       }));
@@ -191,7 +203,8 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Search
     try {
       let queryBuilder = supabase
         .from("document_embeddings")
-        .select("chunk_index, content, metadata, embedding");
+        .select("chunk_index, content, metadata, embedding")
+        .is("deleted_at", null);
 
       if (documentId) {
         queryBuilder = queryBuilder.eq("document_id", documentId);
@@ -325,6 +338,163 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Search
 }
 
 /**
+ * Cross-document hybrid search: searches across all user documents.
+ * Groups results by document and returns the most relevant chunks per document.
+ */
+export async function crossDocumentSearch(
+  query: string,
+  queryEmbedding: number[],
+  userId: string,
+  options: {
+    topK?: number;
+    chunksPerDoc?: number;
+    weights?: { bm25: number; vector: number };
+  } = {},
+): Promise<SearchResult[]> {
+  const { topK = 20, chunksPerDoc = 3, weights = { bm25: 0.3, vector: 0.7 } } = options;
+  const supabase = createSupabaseAdminClient();
+
+  let bm25Rows: BM25Row[] = [];
+  let vectorRows: VectorRow[] = [];
+
+  // BM25 search across all user documents
+  try {
+    const { data, error } = await supabase
+      .from("document_embeddings")
+      .select("document_id, chunk_index, content, metadata, ts_rank(to_tsvector('english', content), plainto_tsquery('english', $1)) as bm25_score")
+      .textSearch("content", query, { type: "websearch" })
+      .order("bm25_score", { ascending: false })
+      .limit(topK * 3)
+      .is("deleted_at", null)
+      .in(
+        "document_id",
+        (
+          await supabase
+            .from("documents")
+            .select("id")
+            .eq("user_id", userId)
+            .is("deleted_at", null)
+        ).data?.map((d) => d.id) ?? [],
+      );
+
+    if (!error && data) {
+      bm25Rows = data as unknown as BM25Row[];
+    }
+  } catch {
+    // BM25 not available
+  }
+
+  // Vector search across all user documents
+  try {
+    const { data, error } = await supabase
+      .from("document_embeddings")
+      .select("document_id, chunk_index, content, metadata, embedding")
+      .limit(topK * 3)
+      .is("deleted_at", null)
+      .in(
+        "document_id",
+        (
+          await supabase
+            .from("documents")
+            .select("id")
+            .eq("user_id", userId)
+            .is("deleted_at", null)
+        ).data?.map((d) => d.id) ?? [],
+      );
+
+    if (!error && data) {
+      vectorRows = (data as unknown as Array<{
+        document_id: string;
+        chunk_index: number;
+        content: string;
+        metadata: unknown;
+        embedding: unknown;
+      }>).map((row) => ({
+        ...row,
+        source: "document" as const,
+      }));
+    }
+  } catch {
+    // Vector search failed
+  }
+
+  // Compute cosine similarity for vector rows
+  let scoredVectorRows: ScoredVectorRow[] = [];
+  if (vectorRows.length > 0) {
+    scoredVectorRows = vectorRows
+      .map((row) => {
+        let score = 0;
+        if (Array.isArray(row.embedding) && (row.embedding as number[]).length === queryEmbedding.length) {
+          score = cosineSimilarity(queryEmbedding, row.embedding as number[]);
+        }
+        return { ...row, score: score >= 0 ? score : 0 };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK * 3);
+  }
+
+  // Build ranked items
+  const rankedBM25: RankedItem[] = bm25Rows.slice(0, topK * 3).map((row, idx) => ({
+    chunkIndex: row.chunk_index,
+    content: row.content,
+    metadata: parseMetadata(row.metadata),
+    score: row.bm25_score,
+    source: "document" as const,
+    rank: idx,
+  }));
+
+  const rankedVector: RankedItem[] = scoredVectorRows.slice(0, topK * 3).map((row, idx) => ({
+    chunkIndex: row.chunk_index,
+    content: row.content,
+    metadata: parseMetadata(row.metadata),
+    score: row.score,
+    source: row.source,
+    rank: idx,
+  }));
+
+  // RRF fusion
+  if (rankedBM25.length === 0 && rankedVector.length === 0) {
+    return [];
+  }
+
+  if (rankedBM25.length === 0) {
+    return rankedVector.slice(0, topK);
+  }
+
+  if (rankedVector.length === 0) {
+    return rankedBM25.slice(0, topK);
+  }
+
+  const fused = reciprocalRankFusion(rankedBM25, rankedVector);
+
+  // Group by document and limit chunks per document
+  const docGroups = new Map<string, SearchResult[]>();
+  for (const item of fused) {
+    const docId = (scoredVectorRows.find((r) => r.chunk_index === item.chunkIndex) as ScoredVectorRow & { document_id?: string })?.document_id ?? "unknown";
+    if (!docGroups.has(docId)) {
+      docGroups.set(docId, []);
+    }
+    if (docGroups.get(docId)!.length < chunksPerDoc) {
+      docGroups.get(docId)!.push({
+        chunkIndex: item.chunkIndex,
+        content: item.content,
+        metadata: item.metadata,
+        score: item.score,
+        source: item.source,
+        documentId: docId,
+      });
+    }
+  }
+
+  // Flatten and sort by score
+  const results: SearchResult[] = [];
+  for (const [, chunks] of docGroups) {
+    results.push(...chunks);
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
+/**
  * Pure vector similarity search (used as fallback / for files).
  */
 export async function vectorSearch(
@@ -337,7 +507,8 @@ export async function vectorSearch(
   const { data, error } = await supabase
     .from("document_embeddings")
     .select("chunk_index, content, metadata, embedding")
-    .eq("document_id", documentId);
+    .eq("document_id", documentId)
+    .is("deleted_at", null);
 
   if (error || !data) {
     return [];

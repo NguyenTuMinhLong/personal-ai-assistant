@@ -105,11 +105,12 @@ export async function listDocumentEmbeddings(documentId: string) {
 
 export async function deleteUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
+  const now = new Date().toISOString();
 
   // Soft delete: set deleted_at timestamp
   const { error: documentError } = await supabase
     .from("documents")
-    .update({ deleted_at: new Date().toISOString() })
+    .update({ deleted_at: now })
     .eq("id", documentId)
     .eq("user_id", userId);
 
@@ -117,8 +118,20 @@ export async function deleteUserDocument(userId: string, documentId: string) {
     throw new Error(documentError.message || "Could not delete document.");
   }
 
-  // Embeddings remain but are inaccessible because the parent document is soft-deleted
-  // and listUserDocuments / getUserDocument filter them out
+  // Cascade soft delete to embeddings (preserves ability to restore)
+  await supabase
+    .from("document_embeddings")
+    .update({ deleted_at: now })
+    .eq("document_id", documentId)
+    .is("deleted_at", null);
+
+  // Clean up QA cache for this document (not recoverable, but keeps cache fresh)
+  await supabase
+    .from("qa_cache")
+    .delete()
+    .eq("document_id", documentId);
+
+  // Invalidate chunk cache
   invalidateChunkCache(documentId);
 
   return true;
@@ -142,11 +155,12 @@ export async function restoreDocument(userId: string, documentId: string) {
     throw new Error(documentError.message || "Could not restore document.");
   }
 
-  // Restore embeddings metadata (clear deleted_at)
+  // Restore embeddings (clear deleted_at so they're accessible again)
   await supabase
     .from("document_embeddings")
-    .update({ metadata: { chunkType: "fixed" } })
-    .eq("document_id", documentId);
+    .update({ deleted_at: null })
+    .eq("document_id", documentId)
+    .is("deleted_at", null);
 
   invalidateChunkCache(documentId);
 

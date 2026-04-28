@@ -86,6 +86,7 @@ export type SearchResult = {
   metadata: ChunkMetadata;
   score: number;
   source: "document" | "file";
+  documentId?: string;
 };
 
 export type MetadataFilters = {
