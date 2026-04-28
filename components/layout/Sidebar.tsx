@@ -11,6 +11,8 @@ import {
   Sparkles,
   Trash2,
   Loader2,
+  Search,
+  BarChart3,
 } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -108,6 +110,18 @@ export function Sidebar() {
           <MessageSquare className="h-4 w-4" />,
           "Chat",
           pathname === "/chat" || pathname.startsWith("/chat"),
+        )}
+        {navLink(
+          "/search",
+          <Search className="h-4 w-4" />,
+          "Search",
+          pathname === "/search",
+        )}
+        {navLink(
+          "/analytics",
+          <BarChart3 className="h-4 w-4" />,
+          "Analytics",
+          pathname === "/analytics",
         )}
 
         {/* Chat History Section */}

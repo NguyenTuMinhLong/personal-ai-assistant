@@ -21,9 +21,28 @@ import {
   getCachedImageAnalysis,
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
+import { createSupabaseServerClient } from "@/lib/supabase";
 import {
   searchFileChunks,
 } from "@/lib/file-cache";
+
+// ─── Analytics helper ──────────────────────────────────────────
+async function trackEvent(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  eventType: string,
+  eventData: Record<string, unknown> = {}
+) {
+  try {
+    await supabase.from("usage_events").insert({
+      user_id: userId,
+      event_type: eventType,
+      event_data: eventData,
+    });
+  } catch (error) {
+    console.error("[analytics] Failed to track event:", error);
+  }
+}
 
 // ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
@@ -187,6 +206,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const supabase = await createSupabaseServerClient();
+
   let body: RequestBody;
 
   try {
@@ -284,6 +305,11 @@ export async function POST(req: NextRequest) {
     }
 
     sessionId = session.id;
+
+    trackEvent(supabase, user.id, "chat_session_created", {
+      sessionId: session.id,
+      documentId,
+    });
   }
 
   // ── Cache lookup ──────────────────────────────────────────────
@@ -313,6 +339,8 @@ export async function POST(req: NextRequest) {
     }
 
     const elapsedMs = Date.now() - startTime;
+
+    trackEvent(supabase, user.id, "cache_hit", { documentId, sessionId, elapsedMs });
 
     return NextResponse.json({
       answer: cached.answer,
@@ -652,6 +680,16 @@ ${context}`,
   });
 
   const elapsedMs = Date.now() - startTime;
+
+  // Fire-and-forget: don't await, don't block response
+  trackEvent(supabase, user.id, "query", {
+    documentId,
+    sessionId,
+    reused: false,
+    elapsedMs,
+    contextUsed: topChunks.length > 0,
+    imageProcessed: shouldProcessImage,
+  });
 
   return NextResponse.json({
     answer: text,

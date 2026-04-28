@@ -7,6 +7,13 @@ import { hybridSearch } from "@/lib/hybrid-search";
 import { buildContext } from "@/lib/context-builder";
 import { getUserDocument } from "@/lib/documents";
 import { searchFileChunks } from "@/lib/file-cache";
+import {
+  createChatSession,
+  getChatSession,
+  saveMessage,
+  touchChatSession,
+} from "@/lib/sessions";
+import { createSupabaseServerClient } from "@/lib/supabase";
 
 // ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
@@ -85,6 +92,26 @@ function buildSystemPrompt(
     : `The user is asking about "${documentFilename}" but no specific content was found in the document. Answer in English based on your knowledge if possible, and note if the question doesn't seem related to the document.`;
 }
 
+// ─── Track stream event (fire-and-forget) ─────────────────────────────────────
+function trackStreamEvent(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  eventType: string,
+  eventData: Record<string, unknown>,
+) {
+  try {
+    supabase.from("usage_events").insert({
+      user_id: userId,
+      event_type: eventType,
+      event_data: eventData,
+    }).then(({ error }) => {
+      if (error) console.error("[analytics] Track event error:", error.message);
+    });
+  } catch (err) {
+    console.error("[analytics] Track event error:", err);
+  }
+}
+
 // ─── Route exports ─────────────────────────────────────────────
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -93,61 +120,59 @@ export async function POST(req: NextRequest) {
   const requestId = generateRequestId();
 
   const user = await currentUser();
-
   if (!user) {
-    return NextResponse.json(
-      { error: "Unauthorized", requestId },
-      { status: 401 },
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let body: RequestBody;
-
   try {
     body = (await req.json()) as RequestBody;
   } catch {
-    return NextResponse.json(
-      { error: "Invalid request body. Expected JSON.", requestId },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
   const message = body.message?.trim() ?? "";
   const chatFiles = body.chatFiles || undefined;
   const documentId = body.documentId?.trim();
+  const incomingSessionId = body.sessionId?.trim();
 
-  // ── Input validation ──────────────────────────────────────────
   if (!documentId) {
-    return NextResponse.json(
-      { error: "Choose a document first.", requestId },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Choose a document first." }, { status: 400 });
   }
-
   if (!message) {
-    return NextResponse.json(
-      { error: "Ask a question first.", requestId },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Ask a question first." }, { status: 400 });
   }
-
   if (message.length > MAX_MESSAGE_LENGTH) {
     return NextResponse.json(
-      {
-        error: `Message too long. Maximum ${MAX_MESSAGE_LENGTH} characters. You used ${message.length}.`,
-        requestId,
-      },
-      { status: 400 },
+      { error: `Message too long. Maximum ${MAX_MESSAGE_LENGTH} characters.` },
+      { status: 400 }
     );
   }
 
   const document = await getUserDocument(user.id, documentId);
-
   if (!document) {
-    return NextResponse.json(
-      { error: "Document not found.", requestId },
-      { status: 404 },
-    );
+    return NextResponse.json({ error: "Document not found." }, { status: 404 });
+  }
+
+  // ── Session management ────────────────────────────────────────
+  let sessionId = incomingSessionId ?? null;
+
+  if (sessionId) {
+    const existing = await getChatSession(user.id, sessionId);
+    if (!existing || existing.document_id !== documentId) {
+      sessionId = null;
+    }
+  }
+
+  if (!sessionId) {
+    const session = await createChatSession(user.id, documentId, message.slice(0, 60));
+    sessionId = session?.id ?? null;
+  }
+
+  // ── Save user message ─────────────────────────────────────────
+  if (sessionId) {
+    await saveMessage(sessionId, "user", message, []);
+    await touchChatSession(sessionId);
   }
 
   // ── RAG: hybrid search ───────────────────────────────────────
@@ -164,7 +189,6 @@ export async function POST(req: NextRequest) {
   });
 
   let context = "";
-
   if (topChunks.length > 0) {
     const { context: builtContext } = buildContext(topChunks, {
       maxChars: MAX_CONTEXT_CHARS,
@@ -176,14 +200,11 @@ export async function POST(req: NextRequest) {
 
   // ── File context ──────────────────────────────────────────────
   let fileContext = "";
-
   if (chatFiles && chatFiles.length > 0) {
     const fileBlocks: string[] = [];
-
     for (const file of chatFiles) {
-      if (file.extractedText && file.extractedText.trim()) {
+      if (file.extractedText?.trim()) {
         const text = file.extractedText.trim();
-
         if (text.length <= MAX_FILE_CHARS) {
           fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${text}`);
         } else {
@@ -193,10 +214,10 @@ export async function POST(req: NextRequest) {
               value: message,
             });
             const relevant = await searchFileChunks(file.fileId, fileQueryEmbedding, 5);
-
             if (relevant.length > 0) {
-              const block = relevant.map((c) => c.content).join("\n\n");
-              fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${block}`);
+              fileBlocks.push(
+                `[File: ${sanitizeFilename(file.filename)}]\n${relevant.map(c => c.content).join("\n\n")}`
+              );
             } else {
               fileBlocks.push(`[File: ${sanitizeFilename(file.filename)}]\n${text.slice(0, MAX_FILE_CHARS)}`);
             }
@@ -242,13 +263,73 @@ ${context}`,
     chatFileNames: chatFiles?.map(f => f.filename),
   });
 
-  // ── Stream response ─────────────────────────────────────────
+  // ── Track query event (fire-and-forget, never blocks the response) ──
+  const supabase = await createSupabaseServerClient();
+  trackStreamEvent(supabase, user.id, "query", {
+    documentId,
+    sessionId,
+    contextUsed: !!context,
+    hasFiles,
+  });
+
+  // ── Save assistant message placeholder to get DB ID ───────────
+  const savedAssistantMessage = sessionId
+    ? await saveMessage(sessionId, "assistant", "", [])
+    : null;
+  const serverMessageId = savedAssistantMessage?.id ?? null;
+
+  // ── Stream via SSE ─────────────────────────────────────────────
   const result = streamText({
     model: getChatModel(false),
     system: systemPrompt,
     messages: [promptContent],
   });
 
-  // Return streaming response using AI SDK's text stream response
-  return result.toTextStreamResponse();
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      // Send session + message ID first so client can use it for feedback
+      if (sessionId) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "session", sessionId })}\n\n`)
+        );
+      }
+      if (serverMessageId) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "message_id", messageId: serverMessageId })}\n\n`)
+        );
+      }
+
+      const textStream = result.fullStream;
+
+      for await (const event of textStream) {
+        if (event.type === "text-delta") {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "text", content: event.text })}\n\n`)
+          );
+        }
+        if (event.type === "finish") {
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          controller.close();
+          return;
+        }
+      }
+
+      controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+      controller.close();
+    },
+    cancel() {
+      // Handle stream cancellation
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Request-Id": requestId,
+    },
+  });
 }

@@ -29,6 +29,10 @@ import {
   ZoomIn,
   RotateCcw,
   Edit3,
+  ThumbsUp,
+  ThumbsDown,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -255,8 +259,10 @@ interface MessageActionsProps {
   onToggleNote: (messageId: string) => Promise<void>;
   onDeleteMessage: (messageId: string) => void;
   onRetryMessage: (messageId: string) => void;
+  onFeedback: (messageId: string, vote: "up" | "down") => Promise<void>;
   copiedMessageId: string | null;
   isSaved: boolean;
+  feedbackVote?: "up" | "down" | null;
 }
 
 const MessageActions = memo(function MessageActions({
@@ -268,11 +274,14 @@ const MessageActions = memo(function MessageActions({
   onToggleNote,
   onDeleteMessage,
   onRetryMessage,
+  onFeedback,
   copiedMessageId,
   isSaved,
+  feedbackVote,
 }: MessageActionsProps) {
   const isCopied = copiedMessageId === message.id;
   const hasError = !!message.error;
+  const isAssistant = message.role === "assistant";
 
   return (
     <div className="mt-2 ml-1 flex flex-wrap items-center gap-1.5">
@@ -329,6 +338,35 @@ const MessageActions = memo(function MessageActions({
           </>
         )}
       </button>
+
+      {isAssistant && (
+        <>
+          <button
+            type="button"
+            onClick={() => onFeedback(message.id, "up")}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
+              feedbackVote === "up"
+                ? "border-emerald-300 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                : "border-stone-200 bg-white text-stone-400 hover:border-emerald-300 hover:text-emerald-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-500 dark:hover:border-emerald-700 dark:hover:text-emerald-400"
+            }`}
+            title="This answer is helpful"
+          >
+            <ThumbsUp className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onFeedback(message.id, "down")}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-all ${
+              feedbackVote === "down"
+                ? "border-red-300 bg-red-50 text-red-500 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
+                : "border-stone-200 bg-white text-stone-400 hover:border-red-300 hover:text-red-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-500 dark:hover:border-red-700 dark:hover:text-red-400"
+            }`}
+            title="This answer needs improvement"
+          >
+            <ThumbsDown className="h-3 w-3" />
+          </button>
+        </>
+      )}
 
       <button
         data-testid="save-note-btn"
@@ -387,6 +425,8 @@ interface MessageBubbleProps {
   onPendingSelectionChange: (selection: { messageId: string; text: string; selectionStart: number; selectionEnd: number } | null) => void;
   onRef?: (el: HTMLDivElement | null) => void;
   onCitationClick?: (citationIndex: number) => void;
+  onFeedback: (messageId: string, vote: "up" | "down") => Promise<void>;
+  feedbackVote?: "up" | "down" | null;
 }
 
 const MessageBubble = memo(function MessageBubble({
@@ -406,7 +446,9 @@ const MessageBubble = memo(function MessageBubble({
   onPendingSelectionChange,
   onRef,
   onCitationClick,
-}: MessageBubbleProps & { onCitationClick?: (citationIndex: number) => void }) {
+  onFeedback,
+  feedbackVote,
+}: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isFlashed = flashedMessageId === message.id;
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -638,8 +680,10 @@ const MessageBubble = memo(function MessageBubble({
               onToggleNote={onToggleNote}
               onDeleteMessage={onDeleteMessage}
               onRetryMessage={onRetryMessage}
+              onFeedback={onFeedback}
               copiedMessageId={copiedMessageId}
               isSaved={isSaved}
+              feedbackVote={feedbackVote}
             />
           ) : (
             <div className="mt-2 ml-1 flex items-center justify-end gap-1.5">
@@ -765,6 +809,8 @@ export function ChatWorkspace({
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [renamingSession, setRenamingSession] = useState(false);
   const [sessionTitle, setSessionTitle] = useState<string>("");
+  const [streamingMode, setStreamingMode] = useState(false);
+  const [messageFeedback, setMessageFeedback] = useState<Record<string, "up" | "down" | null>>({});
 
   const pendingSelectionRef = useRef<{
     messageId: string;
@@ -1105,6 +1151,39 @@ export function ChatWorkspace({
     [notes, messages, currentSessionId, pinnedCount],
   );
 
+  // ── Feedback ─────────────────────────────────────────────────
+  const handleFeedback = useCallback(
+    async (messageId: string, vote: "up" | "down") => {
+      const current = messageFeedback[messageId];
+
+      if (current === vote) {
+        // Toggle off: remove feedback
+        try {
+          const res = await fetch(`/api/feedback?messageId=${messageId}`, { method: "DELETE" });
+          if (!res.ok) throw new Error("Failed to remove");
+          setMessageFeedback((prev) => ({ ...prev, [messageId]: null }));
+        } catch {
+          toast.error("Failed to remove feedback");
+        }
+      } else {
+        // Set new vote
+        try {
+          const res = await fetch("/api/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId, vote }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error ?? "Failed to submit feedback");
+          setMessageFeedback((prev) => ({ ...prev, [messageId]: vote }));
+          toast.success(vote === "up" ? "Thanks for the feedback!" : "Thanks, we'll do better.");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to submit feedback");
+        }
+      }
+    },
+    [messageFeedback],
+  );
   // ── Apply highlight ────────────────────────────────────────────
   const handleHighlight = useCallback(
     async (messageId: string, color: HighlightColor) => {
@@ -1556,17 +1635,125 @@ export function ChatWorkspace({
       requestAnimationFrame(() => scrollToLatest());
 
       try {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            documentId: currentDocumentId,
-            message: trimmed,
-            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
-            chatFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
-            sessionId: currentSessionId,
-          }),
-        });
+        if (streamingMode) {
+          // ── Streaming mode ────────────────────────────────────────
+          const clientMessageId = createMessageId();
+          let serverMessageId: string | null = null;
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: clientMessageId,
+              role: "assistant",
+              content: "",
+              citations: [],
+              highlightColor: null,
+              selectionStart: null,
+              selectionEnd: null,
+              createdAt: new Date().toISOString(),
+              error: null,
+            },
+          ]);
+
+          const response = await fetch("/api/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              documentId: currentDocumentId,
+              message: trimmed,
+              imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+              chatFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+              sessionId: currentSessionId,
+            }),
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: "Stream failed" }));
+            throw new Error(err.error ?? "Could not get an answer.");
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error("No response stream.");
+
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const data = line.slice(6).trim();
+              if (data === "[DONE]") continue;
+
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.type === "message_id" && parsed.messageId) {
+                  serverMessageId = parsed.messageId;
+                } else if (parsed.type === "session" && parsed.sessionId) {
+                  setCurrentSessionId(parsed.sessionId);
+                  router.replace(
+                    `/chat?documentId=${currentDocumentId}&sessionId=${parsed.sessionId}`
+                  );
+                } else if (parsed.type === "text" && typeof parsed.content === "string") {
+                  setMessages((prev) => {
+                    const idx = prev.findIndex((m) => m.id === clientMessageId);
+                    if (idx === -1) return prev;
+                    const updated = [...prev];
+                    updated[idx] = { ...updated[idx], content: (updated[idx].content ?? "") + parsed.content };
+                    return updated;
+                  });
+                  requestAnimationFrame(() => scrollToLatest());
+                }
+              } catch {
+                // Skip malformed lines
+              }
+            }
+          }
+
+          // Update the client message with the real server ID for feedback
+          if (serverMessageId && serverMessageId !== clientMessageId) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === clientMessageId ? { ...m, id: serverMessageId as string } : m
+              )
+            );
+            setMessageFeedback((prev) => {
+              const val = prev[clientMessageId];
+              const updated = { ...prev };
+              if (val != null) {
+                updated[serverMessageId as string] = val;
+                delete updated[clientMessageId];
+              }
+              return updated;
+            });
+          }
+
+          // Touch session to update timestamp
+          if (currentSessionId) {
+            fetch(`/api/sessions/${currentSessionId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            }).catch(() => {});
+          }
+        } else {
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              documentId: currentDocumentId,
+              message: trimmed,
+              imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+              chatFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+              sessionId: currentSessionId,
+            }),
+          });
 
         const payload = (await response.json()) as
           | {
@@ -1618,6 +1805,7 @@ export function ChatWorkspace({
         if (payload.reused) {
           toast.success("Reused a previous answer — instant response!");
         }
+        }
       } catch (error) {
         const errorMessage =
           error instanceof Error
@@ -1652,6 +1840,8 @@ export function ChatWorkspace({
       scrollToLatest,
       router,
       filePreviews,
+      streamingMode,
+      messages,
     ],
   );
 
@@ -2006,6 +2196,25 @@ export function ChatWorkspace({
                 <span className="hidden sm:inline">Export</span>
               </button>
             )}
+
+            {currentSessionId && (
+              <button
+                onClick={() => setStreamingMode((v) => !v)}
+                title={streamingMode ? "Disable streaming (responses appear at once)" : "Enable streaming (real-time responses)"}
+                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
+                  streamingMode
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                    : "border-stone-200 bg-white text-stone-500 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-500 dark:hover:bg-stone-700"
+                }`}
+              >
+                {streamingMode ? (
+                  <Wifi className="h-3.5 w-3.5" />
+                ) : (
+                  <WifiOff className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">{streamingMode ? "Live" : "Batch"}</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -2130,6 +2339,8 @@ export function ChatWorkspace({
                           toast.success("Citation copied to clipboard!");
                         }
                       }}
+                      onFeedback={handleFeedback}
+                      feedbackVote={messageFeedback[message.id]}
                     />
                   </div>
                 );

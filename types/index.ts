@@ -94,3 +94,30 @@ export type MetadataFilters = {
   pageNumber?: number;
   chunkType?: string;
 };
+
+// ==================== Global Search Types ====================
+
+export type GlobalSearchResult = {
+  documentId: string;
+  documentName: string;
+  chunks: SearchResult[];
+  totalScore: number;
+};
+
+export type GlobalSearchResponse = {
+  results: GlobalSearchResult[];
+  query: string;
+  totalResults: number;
+  searchedAt: string;
+};
+
+// ==================== Feedback Types ====================
+
+export type MessageFeedback = {
+  id: string;
+  messageId: string;
+  userId: string;
+  vote: "up" | "down";
+  createdAt: string;
+  updatedAt: string;
+};
