@@ -148,13 +148,13 @@ export default function AnalyticsPage() {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       {/* Header */}
-      <header className="shrink-0 border-b border-stone-200 bg-stone-50 px-6 py-5 dark:border-stone-800 dark:bg-stone-900">
-        <div className="flex items-center justify-between">
+      <header className="shrink-0 border-b border-stone-200 bg-stone-50 px-4 md:px-6 py-4 md:py-5 dark:border-stone-800 dark:bg-stone-900">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-stone-800 dark:text-stone-100">
+            <h1 className="text-lg md:text-xl font-bold text-stone-800 dark:text-stone-100">
               Usage Analytics
             </h1>
-            <p className="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
+            <p className="mt-0.5 text-xs md:text-sm text-stone-500 dark:text-stone-400">
               Track your SecondBrain activity and AI usage
             </p>
           </div>
@@ -169,7 +169,7 @@ export default function AnalyticsPage() {
         </div>
       </header>
 
-      <div className="flex-1 px-6 py-6">
+      <div className="flex-1 px-4 py-4 md:px-6 md:py-6">
         {loading && !data ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-stone-400" />
@@ -195,7 +195,7 @@ export default function AnalyticsPage() {
             )}
 
             {/* Top stats grid */}
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 md:gap-4 sm:grid-cols-3 lg:grid-cols-5">
               <StatCard
                 icon={<MessageSquare className="h-5 w-5 text-stone-500" />}
                 label="Total Queries"

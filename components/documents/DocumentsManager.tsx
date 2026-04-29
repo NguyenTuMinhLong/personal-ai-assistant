@@ -302,16 +302,16 @@ export function DocumentsManager({
   };
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto max-w-6xl px-4 md:px-6">
       {/* Header */}
-      <div className="mb-8 flex items-start justify-between">
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-stone-900 dark:text-stone-100">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-stone-100">
             Your Documents
           </h1>
           <p className="mt-1.5 text-sm text-stone-500 dark:text-stone-400">
             {documents.length > 0
-              ? `${documents.length} document${documents.length !== 1 ? "s" : ""} in your library — upload more to expand your knowledge base`
+              ? `${documents.length} document${documents.length !== 1 ? "s" : ""} in your library`
               : "Upload your first document to get started"}
           </p>
         </div>
@@ -319,7 +319,7 @@ export function DocumentsManager({
         <button
           disabled={uploading}
           onClick={() => document.getElementById("file-upload")?.click()}
-          className="group inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"
+          className="group inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700 shrink-0"
         >
           {uploading ? (
             <>

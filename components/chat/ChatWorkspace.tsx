@@ -1891,11 +1891,11 @@ export function ChatWorkspace({
       {/* ── Sidebar ───────────────────────────────────────────── */}
       <aside
         style={{ width: sidebarWidth }}
-        className="relative shrink-0 border-r border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900"
+        className="relative shrink-0 border-r border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900 max-md:hidden"
       >
         <div
           onMouseDown={startSidebarResize}
-          className="absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize opacity-0 hover:opacity-100 transition-opacity"
+          className="absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize opacity-0 hover:opacity-100 transition-opacity hidden md:block"
         >
           <div className="ml-[-1px] h-full w-0.5 bg-stone-300 dark:bg-stone-600" />
         </div>
@@ -2156,8 +2156,8 @@ export function ChatWorkspace({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 max-sm:gap-1.5 overflow-x-auto">
+            <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-xs text-stone-400 dark:text-stone-500 hidden sm:inline">Doc:</span>
               <select
                 value={currentDocumentId ?? ""}
@@ -2220,7 +2220,7 @@ export function ChatWorkspace({
 
         {/* Error banner */}
         {errorMessage && (
-          <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/40 dark:bg-red-900/20">
+          <div className="mx-4 md:mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/40 dark:bg-red-900/20">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
             <div className="flex-1">
               <p className="text-sm font-medium text-red-800 dark:text-red-300">
@@ -2245,7 +2245,7 @@ export function ChatWorkspace({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={`flex-1 overflow-y-auto p-6 transition-all ${
+          className={`flex-1 overflow-y-auto px-4 py-4 md:p-6 transition-all ${
             isDraggingOver ? "bg-stone-100/80 ring-2 ring-stone-400 ring-inset dark:bg-stone-800/80" : ""
           }`}
         >
@@ -2363,7 +2363,7 @@ export function ChatWorkspace({
           </button>
         )}
 
-        {/* Vertical resize handle */}
+        {/* Vertical resize handle - hidden on mobile */}
         <div
           onMouseDown={(e) => {
             e.preventDefault();
@@ -2387,7 +2387,7 @@ export function ChatWorkspace({
             document.addEventListener("mousemove", onMove);
             document.addEventListener("mouseup", onUp);
           }}
-          className="group h-2 shrink-0 cursor-row-resize flex items-center justify-center bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 transition-colors"
+          className="hidden md:flex group h-2 shrink-0 cursor-row-resize items-center justify-center bg-stone-100 hover:bg-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 transition-colors"
         >
           <div className="h-0.5 w-8 rounded-full bg-stone-300 dark:bg-stone-600 group-hover:bg-stone-400 dark:group-hover:bg-stone-500 transition-colors" />
         </div>
@@ -2496,7 +2496,7 @@ export function ChatWorkspace({
               </div>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 max-sm:gap-1.5">
               {/* Image attachment */}
               <div className="relative group/tooltip">
                 <label
