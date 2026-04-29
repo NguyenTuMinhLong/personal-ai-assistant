@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 import { getSupabaseUrl } from "@/lib/supabase";
+import { getGuestLimits, markGuestUploadUsed } from "@/lib/guest-auth";
 
 const BUCKET_NAME = "chat-images";
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -54,8 +55,24 @@ export async function POST(req: NextRequest) {
   const requestId = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
   const user = await currentUser();
-  if (!user) {
+  const anonymousId = req.headers.get("x-anonymous-id");
+
+  if (!user && !anonymousId) {
     return createErrorResponse("Unauthorized", 401, requestId);
+  }
+
+  const effectiveUserId = user?.id ?? anonymousId!;
+  const isGuestMode = !user && !!anonymousId;
+
+  // ── Guest upload limit check ──
+  if (isGuestMode && anonymousId) {
+    const limits = await getGuestLimits(anonymousId);
+    if (limits.isBlocked) {
+      return createErrorResponse("Trial ended. Sign up to continue.", 403, requestId);
+    }
+    if (limits.uploadUsed) {
+      return createErrorResponse("Guest trial allows only 1 image upload. Sign up to upload more.", 403, requestId);
+    }
   }
 
   try {
@@ -132,7 +149,7 @@ export async function POST(req: NextRequest) {
     const sanitizedName = file.name
       .replace(/[^a-zA-Z0-9.-]/g, "_")
       .slice(0, 100);
-    const fileName = `${user.id}/${requestId}-${sanitizedName}`;
+    const fileName = `${effectiveUserId}/${requestId}-${sanitizedName}`;
 
     const supabase = createSupabaseAdminClient();
 
@@ -183,6 +200,11 @@ export async function POST(req: NextRequest) {
     const { data: urlData } = supabase.storage
       .from(BUCKET_NAME)
       .getPublicUrl(fileName);
+
+    // ── Mark guest upload as used after successful upload ──
+    if (isGuestMode && anonymousId) {
+      await markGuestUploadUsed(anonymousId);
+    }
 
     return NextResponse.json({
       url: urlData.publicUrl,

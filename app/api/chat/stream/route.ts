@@ -18,6 +18,7 @@ import {
   getCachedImageAnalysis,
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
+import { getGuestLimits, incrementGuestMessageCount } from "@/lib/guest-auth";
 
 // ─── Types ─────────────────────────────────────────────────────
 type RequestBody = {
@@ -165,9 +166,26 @@ export async function POST(req: NextRequest) {
   const requestId = generateRequestId();
 
   const user = await currentUser();
-  if (!user) {
+  const anonymousId = req.headers.get("x-anonymous-id");
+
+  if (!user && !anonymousId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // ── Guest trial limit check ──
+  if (anonymousId) {
+    const limits = await getGuestLimits(anonymousId);
+    if (limits.isBlocked) {
+      return NextResponse.json(
+        { error: "Trial ended. Sign up to continue.", trialEnded: true },
+        { status: 403 }
+      );
+    }
+  }
+
+  const supabase = createSupabaseAdminClient();
+  const effectiveUserId = user?.id ?? anonymousId!;
+  const isGuestMode = !user && !!anonymousId;
 
   let body: RequestBody;
   try {
@@ -196,23 +214,29 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const document = await getUserDocument(user.id, documentId);
-  if (!document) {
-    return NextResponse.json({ error: "Document not found." }, { status: 404 });
+  // ── Document lookup ──
+  let document: { id: string; filename: string } | null = null;
+  if (!isGuestMode) {
+    document = await getUserDocument(user!.id, documentId);
+    if (!document) {
+      return NextResponse.json({ error: "Document not found." }, { status: 404 });
+    }
+  } else {
+    document = { id: documentId, filename: documentId };
   }
 
   // ── Session management ────────────────────────────────────────
   let sessionId = incomingSessionId ?? null;
 
   if (sessionId) {
-    const existing = await getChatSession(user.id, sessionId);
+    const existing = await getChatSession(effectiveUserId, sessionId);
     if (!existing || existing.document_id !== documentId) {
       sessionId = null;
     }
   }
 
   if (!sessionId) {
-    const session = await createChatSession(user.id, documentId, message.slice(0, 60));
+    const session = await createChatSession(effectiveUserId, documentId, message.slice(0, 60));
     sessionId = session?.id ?? null;
   }
 
@@ -245,27 +269,29 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── RAG: hybrid search ───────────────────────────────────────
-  const { embedding: queryEmbedding } = await embed({
-    model: getEmbeddingModel(),
-    value: message,
-  });
-
-  const topChunks = await hybridSearch({
-    query: message,
-    queryEmbedding,
-    documentId,
-    topK: RAG_TOP_K,
-  });
-
+  // ── RAG: hybrid search (skip for guest mode — no uploaded documents) ──
   let context = "";
-  if (topChunks.length > 0) {
-    const { context: builtContext } = buildContext(topChunks, {
-      maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
-      includeMetadata: true,
-      compressMode: "smart_truncate",
+  if (!isGuestMode) {
+    const { embedding: queryEmbedding } = await embed({
+      model: getEmbeddingModel(),
+      value: message,
     });
-    context = builtContext;
+
+    const topChunks = await hybridSearch({
+      query: message,
+      queryEmbedding,
+      documentId,
+      topK: RAG_TOP_K,
+    });
+
+    if (topChunks.length > 0) {
+      const { context: builtContext } = buildContext(topChunks, {
+        maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
+        includeMetadata: true,
+        compressMode: "smart_truncate",
+      });
+      context = builtContext;
+    }
   }
 
   // ── File context ──────────────────────────────────────────────
@@ -377,19 +403,19 @@ ${context}`,
     hasFileContext: !!fileContext,
     hasFiles,
     imageUrl,
-    documentFilename: document.filename,
+    documentFilename: document!.filename,
     chatFileCount: chatFiles?.length,
     chatFileNames: chatFiles?.map(f => f.filename),
   });
 
   // ── Track query event (fire-and-forget, never blocks the response) ──
-  const supabase = createSupabaseAdminClient();
-  trackStreamEvent(supabase, user.id, "query", {
+  trackStreamEvent(supabase, effectiveUserId, "query", {
     documentId,
     sessionId,
     contextUsed: !!context,
     hasFiles,
     imageProcessed: shouldProcessImage,
+    isGuest: isGuestMode,
   });
 
   // ── Save assistant message placeholder to get DB ID ───────────
@@ -433,6 +459,12 @@ ${context}`,
           // Cache image processing decision (not the full text, since we stream)
           if (imageUrl && !getCachedImageAnalysis(imageUrl)) {
             setCachedImageAnalysis(imageUrl, shouldProcessImage ? "image processed" : "image skipped", shouldProcessImage);
+          }
+          // ── Increment guest message count after stream finishes ──
+          if (anonymousId) {
+            incrementGuestMessageCount(anonymousId).catch((err) =>
+              console.error("[guest] Failed to increment message count:", err)
+            );
           }
           controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
           controller.close();

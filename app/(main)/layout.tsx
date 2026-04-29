@@ -2,6 +2,7 @@
 import { UserButton } from "@clerk/nextjs";
 import { SidebarWrapper } from "@/components/layout/SidebarWrapper";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { GuestMigrationWrapper } from "@/hooks/useGuestMigration";
 
 export default function MainLayout({
   children,
@@ -28,6 +29,7 @@ export default function MainLayout({
 
         <main className="flex-1 overflow-auto px-6 py-6 max-md:px-4 max-md:py-4">
           <ErrorBoundary>
+            <GuestMigrationWrapper />
             {children}
           </ErrorBoundary>
         </main>

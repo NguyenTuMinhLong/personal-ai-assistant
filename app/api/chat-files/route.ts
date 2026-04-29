@@ -13,6 +13,7 @@ import {
   embedFileChunks,
   type FileChunk,
 } from "@/lib/file-cache";
+import { getGuestLimits, markGuestUploadUsed } from "@/lib/guest-auth";
 
 const BUCKET_NAME = "chat-files";
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
@@ -85,11 +86,33 @@ export async function POST(req: NextRequest) {
   const requestId = `file_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
   const user = await currentUser();
-  if (!user) {
+  const anonymousId = req.headers.get("x-anonymous-id");
+
+  if (!user && !anonymousId) {
     return NextResponse.json(
       { error: "Unauthorized", requestId },
       { status: 401 },
     );
+  }
+
+  const effectiveUserId = user?.id ?? anonymousId!;
+  const isGuestMode = !user && !!anonymousId;
+
+  // ── Guest upload limit check ──
+  if (isGuestMode && anonymousId) {
+    const limits = await getGuestLimits(anonymousId);
+    if (limits.isBlocked) {
+      return NextResponse.json(
+        { error: "Trial ended. Sign up to continue.", requestId, trialEnded: true },
+        { status: 403 }
+      );
+    }
+    if (limits.uploadUsed) {
+      return NextResponse.json(
+        { error: "Guest trial allows only 1 file upload. Sign up to upload more.", requestId, uploadLimitReached: true },
+        { status: 403 }
+      );
+    }
   }
 
   try {
@@ -168,10 +191,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const fileId = generateFileId(user.id, file.name, file.size);
+    const fileId = generateFileId(effectiveUserId, file.name, file.size);
 
     // Check deduplication cache
-    const existing = await getFileCache(user.id, fileId);
+    const existing = await getFileCache(effectiveUserId, fileId);
     if (existing) {
       return NextResponse.json({
         fileId: existing.fileId,
@@ -190,7 +213,7 @@ export async function POST(req: NextRequest) {
     const sanitizedName = file.name
       .replace(/[^a-zA-Z0-9.-]/g, "_")
       .slice(0, 100);
-    const storagePath = `${user.id}/${requestId}-${sanitizedName}`;
+    const storagePath = `${effectiveUserId}/${requestId}-${sanitizedName}`;
 
     const supabase = createSupabaseAdminClient();
 
@@ -258,7 +281,7 @@ export async function POST(req: NextRequest) {
     }
 
     await upsertFileCache({
-      user_id: user.id,
+      user_id: effectiveUserId,
       session_id: null,
       file_id: fileId,
       filename: file.name,
@@ -269,6 +292,11 @@ export async function POST(req: NextRequest) {
       chunks,
       file_size_bytes: file.size,
     });
+
+    // ── Mark guest upload as used after successful upload ──
+    if (isGuestMode && anonymousId) {
+      await markGuestUploadUsed(anonymousId);
+    }
 
     return NextResponse.json({
       fileId,

@@ -1,5 +1,4 @@
 import { currentUser } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
 
 import { ChatWorkspaceClient } from "./ChatWorkspaceClient";
 import { listUserDocuments } from "@/lib/documents";
@@ -19,10 +18,6 @@ export const dynamic = "force-dynamic";
 export default async function ChatPage({ searchParams }: ChatPageProps) {
   const user = await currentUser();
 
-  if (!user) {
-    redirect("/sign-in");
-  }
-
   const params = await searchParams;
 
   const documentIdParam = params.documentId;
@@ -30,23 +25,32 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   const sessionId =
     typeof sessionIdParam === "string" ? sessionIdParam : null;
 
-  // Fetch documents and (optionally) session data in parallel
-  const [documents, sessionData] = await Promise.all([
-    listUserDocuments(user.id),
-    sessionId
-      ? Promise.all([
-          getChatSession(user.id, sessionId),
-          listMessages(sessionId),
-          listSessionAnnotations(user.id, sessionId),
-        ])
-      : Promise.resolve([null, [], []]),
-  ]);
+  // ── Authenticated users: load their documents and session data ──
+  // ── Guest users: handled client-side via useGuestSession ──
+  let documents: Awaited<ReturnType<typeof listUserDocuments>> = [];
+  let session: ChatSession | null = null;
+  let initialMessages: Message[] = [];
+  let initialAnnotations: MessageAnnotation[] = [];
 
-  const [session, initialMessages, initialAnnotations]: [
-    ChatSession | null,
-    Message[],
-    MessageAnnotation[]
-  ] = sessionData as [ChatSession | null, Message[], MessageAnnotation[]];
+  if (user) {
+    const [docs, sessionData] = await Promise.all([
+      listUserDocuments(user.id),
+      sessionId
+        ? Promise.all([
+            getChatSession(user.id, sessionId),
+            listMessages(sessionId),
+            listSessionAnnotations(user.id, sessionId),
+          ])
+        : Promise.resolve([null, [], []]),
+    ]);
+
+    documents = docs;
+    [session, initialMessages, initialAnnotations] = sessionData as [
+      ChatSession | null,
+      Message[],
+      MessageAnnotation[]
+    ];
+  }
 
   // Determine which document to show
   let initialDocumentId: string | null = null;
@@ -61,7 +65,7 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
       : null;
   }
 
-  // Fallback to first document only if no document could be determined
+  // Fallback to first document only if authenticated
   if (!initialDocumentId && documents.length > 0) {
     initialDocumentId = documents[0].id;
   }
@@ -70,9 +74,8 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   const highlightMap = new Map(
     initialAnnotations.map((ann) => [ann.messageId, ann])
   );
-  const transformedMessages = initialMessages.map((msg, index) => {
+  const transformedMessages = initialMessages.map((msg) => {
     const ann = highlightMap.get(msg.id);
-    // Support both single imageUrl and array imageUrls
     const urls = msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : []);
     return {
       id: msg.id,

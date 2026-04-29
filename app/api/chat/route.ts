@@ -22,6 +22,7 @@ import {
   setCachedImageAnalysis,
 } from "@/lib/cache/in-memory-cache";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { getGuestLimits, incrementGuestMessageCount } from "@/lib/guest-auth";
 import {
   searchFileChunks,
 } from "@/lib/file-cache";
@@ -198,8 +199,10 @@ export async function POST(req: NextRequest) {
   const startTime = Date.now();
 
   const user = await currentUser();
+  const anonymousId = req.headers.get("x-anonymous-id");
 
-  if (!user) {
+  // ── Auth: require either Clerk auth or guest anonymous session ──
+  if (!user && !anonymousId) {
     return NextResponse.json(
       { error: "Unauthorized", requestId },
       { status: 401 },
@@ -207,6 +210,21 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createSupabaseAdminClient();
+
+  // ── Guest trial limit check ──
+  if (anonymousId) {
+    const limits = await getGuestLimits(anonymousId);
+    if (limits.isBlocked) {
+      return NextResponse.json(
+        {
+          error: "Trial ended. Sign up to continue.",
+          requestId,
+          trialEnded: true,
+        },
+        { status: 403 },
+      );
+    }
+  }
 
   let body: RequestBody;
 
@@ -273,20 +291,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const document = await getUserDocument(user.id, documentId);
+  // ── Resolve user identifier ──
+  // At least one of user.id or anonymousId is guaranteed to exist here
+  const effectiveUserId: string = user?.id ?? (anonymousId as string);
+  const isGuestMode = !user && !!anonymousId;
 
-  if (!document) {
-    return NextResponse.json(
-      { error: "Document not found.", requestId },
-      { status: 404 },
-    );
+  // ── Document lookup (skip for guest mode — no uploaded documents) ──
+  let document: { id: string; filename: string } | null = null;
+  if (!isGuestMode) {
+    document = await getUserDocument(user!.id, documentId);
+    if (!document) {
+      return NextResponse.json(
+        { error: "Document not found.", requestId },
+        { status: 404 },
+      );
+    }
+  } else {
+    document = { id: documentId, filename: documentId };
   }
 
   // ── Session management ────────────────────────────────────────
   let sessionId = incomingSessionId ?? null;
 
   if (sessionId) {
-    const existing = await getChatSession(user.id, sessionId);
+    const existing = await getChatSession(effectiveUserId, sessionId);
 
     if (!existing || existing.document_id !== documentId) {
       sessionId = null;
@@ -295,7 +323,7 @@ export async function POST(req: NextRequest) {
 
   if (!sessionId) {
     const title = message.slice(0, 60);
-    const session = await createChatSession(user.id, documentId, title);
+    const session = await createChatSession(effectiveUserId, documentId, title);
 
     if (!session?.id) {
       return NextResponse.json(
@@ -306,7 +334,7 @@ export async function POST(req: NextRequest) {
 
     sessionId = session.id;
 
-    trackEvent(supabase, user.id, "chat_session_created", {
+    trackEvent(supabase, effectiveUserId, "chat_session_created", {
       sessionId: session.id,
       documentId,
     });
@@ -314,7 +342,7 @@ export async function POST(req: NextRequest) {
 
   // ── Cache lookup ──────────────────────────────────────────────
   const cached = await findCachedAnswer({
-    userId: user.id,
+    userId: effectiveUserId,
     documentId,
     question: message,
     sessionId,
@@ -340,7 +368,7 @@ export async function POST(req: NextRequest) {
 
     const elapsedMs = Date.now() - startTime;
 
-    trackEvent(supabase, user.id, "cache_hit", { documentId, sessionId, elapsedMs });
+    trackEvent(supabase, effectiveUserId, "cache_hit", { documentId, sessionId, elapsedMs, isGuest: isGuestMode });
 
     return NextResponse.json({
       answer: cached.answer,
@@ -349,16 +377,14 @@ export async function POST(req: NextRequest) {
       assistantMessageId,
       reused: true,
       cacheHit: true,
-      document: {
-        id: document.id,
-        filename: document.filename,
-      },
+      document: document ? { id: document.id, filename: document.filename } : null,
       requestId,
       meta: {
         elapsedMs,
         contextUsed: false,
         imageProcessed: false,
       },
+      isGuest: isGuestMode,
     }, {
       headers: {
         "X-Request-Id": requestId,
@@ -395,37 +421,40 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── RAG: hybrid search ───────────────────────────────────────
-  const { embedding: queryEmbedding } = await embed({
-    model: getEmbeddingModel(),
-    value: message,
-  });
-
-  const topChunks = await hybridSearch({
-    query: message,
-    queryEmbedding,
-    documentId,
-    topK: RAG_TOP_K,
-  });
-
   let citations: CachedCitation[] = [];
   let context = "";
+  let topChunks: Awaited<ReturnType<typeof hybridSearch>> = [];
 
-  if (topChunks.length > 0) {
-    const { context: builtContext, citations: builtCitations } = buildContext(topChunks, {
-      maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
-      includeMetadata: true,
-      compressMode: "smart_truncate",
+  // ── RAG: hybrid search (skip for guest mode — no uploaded documents) ──
+  if (!isGuestMode) {
+    const { embedding: queryEmbedding } = await embed({
+      model: getEmbeddingModel(),
+      value: message,
     });
 
-    context = builtContext;
-    citations = builtCitations.map((c, idx) => ({
-      index: idx + 1,
-      snippet: c.snippet,
-      filename: document.filename,
-      chunkIndex: idx + 1,
-      contentPreview: c.snippet,
-    }));
+    topChunks = await hybridSearch({
+      query: message,
+      queryEmbedding,
+      documentId,
+      topK: RAG_TOP_K,
+    });
+
+    if (topChunks.length > 0) {
+      const { context: builtContext, citations: builtCitations } = buildContext(topChunks, {
+        maxChars: shouldProcessImage ? MAX_CONTEXT_CHARS_WITH_IMAGE : MAX_CONTEXT_CHARS,
+        includeMetadata: true,
+        compressMode: "smart_truncate",
+      });
+
+      context = builtContext;
+      citations = builtCitations.map((c, idx) => ({
+        index: idx + 1,
+        snippet: c.snippet,
+        filename: document!.filename,
+        chunkIndex: idx + 1,
+        contentPreview: c.snippet,
+      }));
+    }
   }
 
   // ── File context ──────────────────────────────────────────────
@@ -671,7 +700,7 @@ ${context}`,
 
   // ── Cache answer ─────────────────────────────────────────────
   await upsertCachedAnswer({
-    userId: user.id,
+    userId: effectiveUserId,
     documentId,
     sessionId,
     question: message,
@@ -681,8 +710,13 @@ ${context}`,
 
   const elapsedMs = Date.now() - startTime;
 
+  // ── Increment guest message count ──
+  if (anonymousId) {
+    await incrementGuestMessageCount(anonymousId);
+  }
+
   // Fire-and-forget: don't await, don't block response
-  trackEvent(supabase, user.id, "query", {
+  trackEvent(supabase, effectiveUserId, "query", {
     documentId,
     sessionId,
     reused: false,
@@ -698,10 +732,7 @@ ${context}`,
     assistantMessageId,
     reused: false,
     cacheHit: false,
-    document: {
-      id: document.id,
-      filename: document.filename,
-    },
+    document: document ? { id: document.id, filename: document.filename } : null,
     requestId,
     meta: {
       elapsedMs,
@@ -710,6 +741,7 @@ ${context}`,
       imageProcessed: shouldProcessImage,
       contextChars: context.length,
     },
+    isGuest: isGuestMode,
   }, {
     headers: {
       "X-Request-Id": requestId,

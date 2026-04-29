@@ -40,6 +40,9 @@ import { useRouter } from "next/navigation";
 
 import { ImageLightbox } from "./ImageLightbox";
 import { useChatSessions } from "@/hooks/useChatSessions";
+import { useGuestSession } from "@/hooks/useGuestSession";
+import { GuestTrialBanner } from "./GuestTrialBanner";
+import { GuestTrialPopup } from "@/components/GuestTrialPopup";
 import type { StoredDocument } from "@/lib/documents";
 
 type Citation = {
@@ -815,6 +818,9 @@ function ChatWorkspaceInner({
   const [streamingMode, setStreamingMode] = useState(false);
   const [messageFeedback, setMessageFeedback] = useState<Record<string, "up" | "down" | null>>({});
 
+  // ── Guest trial state ─────────────────────────────────────────
+  const guest = useGuestSession();
+
   const pendingSelectionRef = useRef<{
     messageId: string;
     text: string;
@@ -1523,7 +1529,11 @@ function ChatWorkspaceInner({
           try {
             const formData = new FormData();
             formData.append("file", file);
-            const res = await fetch("/api/chat-files", { method: "POST", body: formData });
+            const res = await fetch("/api/chat-files", {
+              method: "POST",
+              body: formData,
+              headers: guest.isGuest ? { "x-anonymous-id": guest.session!.anonymousId } : {},
+            });
             const data = await res.json();
 
             if (res.ok && data.fileId) {
@@ -1588,6 +1598,7 @@ function ChatWorkspaceInner({
             const res = await fetch("/api/chat-images", {
               method: "POST",
               body: formData,
+              headers: guest.isGuest ? { "x-anonymous-id": guest.session!.anonymousId } : {},
             });
             const data = await res.json();
             if (!res.ok || !data.url) {
@@ -1658,9 +1669,13 @@ function ChatWorkspaceInner({
             },
           ]);
 
+          const guestHeaders: HeadersInit = guest.isGuest
+            ? { "Content-Type": "application/json", "x-anonymous-id": guest.session!.anonymousId }
+            : { "Content-Type": "application/json" };
+
           const response = await fetch("/api/chat/stream", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: guestHeaders,
             body: JSON.stringify({
               documentId: currentDocumentId,
               message: trimmed,
@@ -1745,10 +1760,15 @@ function ChatWorkspaceInner({
               body: JSON.stringify({}),
             }).catch(() => {});
           }
+
+          // ── Guest: increment message count after stream finishes ──
+          if (guest.isGuest && guest.session) {
+            void guest.incrementMessageCount(guest.session.anonymousId);
+          }
         } else {
           const response = await fetch("/api/chat", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: guestHeaders,
             body: JSON.stringify({
               documentId: currentDocumentId,
               message: trimmed,
@@ -1805,15 +1825,25 @@ function ChatWorkspaceInner({
 
         requestAnimationFrame(() => scrollToLatest());
 
+        // ── Guest: increment message count ──
+        if (guest.isGuest && guest.session) {
+          void guest.incrementMessageCount(guest.session.anonymousId);
+        }
+
         if (payload.reused) {
           toast.success("Reused a previous answer — instant response!");
-        }
         }
       } catch (error) {
         const errorMessage =
           error instanceof Error
             ? error.message
             : "Could not get an answer.";
+
+        // If trial ended, the popup will be shown via guest.isBlocked state
+        if (errorMessage.includes("Trial ended")) {
+          toast.error("Trial ended. Sign up to continue.");
+        }
+
         setErrorMessage(errorMessage);
 
         const assistantMessageId = createMessageId();
@@ -1845,6 +1875,7 @@ function ChatWorkspaceInner({
       filePreviews,
       streamingMode,
       messages,
+      guest,
     ],
   );
 
@@ -2354,6 +2385,25 @@ function ChatWorkspaceInner({
           )}
         </div>
 
+        {/* Guest trial banner */}
+        {guest.isGuest && !guest.isLoading && (
+          <GuestTrialBanner
+            messagesRemaining={guest.messagesRemaining}
+            totalLimit={10}
+            uploadUsed={!guest.canUpload}
+            onSignUp={() => {
+              void router.push("/sign-up");
+            }}
+          />
+        )}
+
+        {/* Guest trial popup */}
+        <GuestTrialPopup
+          isOpen={guest.showPopup}
+          onDismiss={guest.dismissPopup}
+          anonymousId={guest.session?.anonymousId}
+        />
+
         {/* Jump to bottom */}
         {showJumpToLatest && (
           <button
@@ -2507,7 +2557,7 @@ function ChatWorkspaceInner({
                 <label
                   data-testid="image-upload-label"
                   className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border text-stone-400 transition-all ${
-                    !selectedDocument || sending || imagePreviews.length >= 5
+                    !selectedDocument || sending || imagePreviews.length >= 5 || guest.isBlocked || (guest.isGuest && !guest.canUpload)
                       ? "opacity-40 cursor-not-allowed border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-800"
                       : "border-stone-200 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600 dark:hover:bg-stone-700"
                   }`}
@@ -2533,7 +2583,7 @@ function ChatWorkspaceInner({
               <div className="relative group/tooltip">
                 <label
                   className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border text-stone-400 transition-all ${
-                    !selectedDocument || sending || filePreviews.length >= 3
+                    !selectedDocument || sending || filePreviews.length >= 3 || guest.isBlocked || (guest.isGuest && !guest.canUpload)
                       ? "opacity-40 cursor-not-allowed border-stone-200 bg-stone-50 dark:border-stone-700 dark:bg-stone-800"
                       : "border-stone-200 bg-stone-50 hover:border-stone-300 hover:bg-stone-100 hover:text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600 dark:hover:bg-stone-700"
                   }`}
@@ -2572,7 +2622,7 @@ function ChatWorkspaceInner({
                     ? `Ask about ${selectedDocument.filename}...`
                     : "Select a document to start..."
                 }
-                disabled={!selectedDocument || sending}
+                disabled={(!selectedDocument || sending || guest.isBlocked)}
                 className="flex-1 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 dark:border-stone-700 dark:bg-stone-800 dark:text-white dark:placeholder:text-stone-500 dark:focus:border-stone-600 dark:focus:ring-stone-700 transition-shadow"
               />
 
@@ -2588,9 +2638,9 @@ function ChatWorkspaceInner({
                   (!input.trim() && imagePreviews.length === 0 && filePreviews.length === 0) ||
                   !selectedDocument ||
                   sending ||
-                  sending ||
                   uploadingImage ||
-                  (filePreviews.length > 0 && filePreviews.some(fp => fp.uploading))
+                  (filePreviews.length > 0 && filePreviews.some(fp => fp.uploading)) ||
+                  guest.isBlocked
                 }
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white transition-all duration-200 hover:bg-stone-800 hover:scale-105 hover:shadow-md active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-primary dark:hover:bg-primary-hover"
               >

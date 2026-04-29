@@ -45,6 +45,13 @@ export function createSupabaseAdminClient() {
   });
 }
 
+// Browser/client-side anonymous session client — persists to localStorage
+export function createSupabaseAnonClient() {
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: { autoRefreshToken: false, persistSession: true },
+  });
+}
+
 export const createSupabaseServerClient = async () => {
   const cookieStore = await cookies();
   type CookieOptions = Omit<Parameters<typeof cookieStore.set>[0], 'name' | 'value'>;
