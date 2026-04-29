@@ -6,6 +6,10 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/',
+  '/chat(.*)',
+  '/api/chat(.*)',
+  '/api/chat-files(.*)',
+  '/api/chat-images(.*)',
 ]);
 
 // Simple in-memory rate limiter for Edge runtime
