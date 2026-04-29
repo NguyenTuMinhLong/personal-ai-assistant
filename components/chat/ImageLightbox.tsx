@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback } from "react";
+import Image from "next/image";
 import { X, Download } from "lucide-react";
 
 interface ImageLightboxProps {
@@ -74,12 +75,15 @@ export function ImageLightbox({ imageUrl, onClose }: ImageLightboxProps) {
       </div>
 
       {/* Image at original size */}
-      <img
+      <Image
         src={imageUrl}
         alt="Full size"
+        fill
         onClick={(e) => e.stopPropagation()}
-        className="max-h-screen max-w-screen cursor-default rounded-lg shadow-2xl object-contain"
-        style={{ maxHeight: "90vh", maxWidth: "90vw" }}
+        className="cursor-default rounded-lg shadow-2xl object-contain"
+        style={{ objectFit: "contain" }}
+        sizes="90vw"
+        priority
       />
     </div>
   );

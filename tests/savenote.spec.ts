@@ -194,7 +194,7 @@ test.describe("Pin Note", () => {
     expect(docsBox).not.toBeNull();
     expect(pinnedBox).not.toBeNull();
     // Pinned should be below documents (higher Y coordinate)
-    expect(pinnedBox!.top).toBeGreaterThan(docsBox!.top);
+    expect(pinnedBox!.y).toBeGreaterThan(docsBox!.y);
   });
 
   test("pinned notes persist after reload", async ({ page }) => {

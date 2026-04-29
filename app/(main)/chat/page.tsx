@@ -1,11 +1,11 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
-import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
+import { ChatWorkspaceClient } from "./ChatWorkspaceClient";
 import { listUserDocuments } from "@/lib/documents";
 import { getChatSession, listMessages } from "@/lib/sessions";
 import { listSessionAnnotations } from "@/lib/annotations";
-import type { ChatSession, ChatFile, Message, MessageAnnotation, HighlightColor } from "@/types";
+import type { ChatSession, Message, MessageAnnotation, HighlightColor } from "@/types";
 
 type ChatPageProps = {
   searchParams: Promise<{
@@ -98,7 +98,7 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
   }));
 
   return (
-    <ChatWorkspace
+    <ChatWorkspaceClient
       documents={documents}
       initialDocumentId={initialDocumentId}
       initialSessionId={sessionId}

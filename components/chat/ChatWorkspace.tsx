@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import Image from "next/image";
 import {
   ArrowDown,
   BookmarkPlus,
@@ -587,9 +588,11 @@ const MessageBubble = memo(function MessageBubble({
                     onClick={() => setLightboxImage(url)}
                     className="relative group shrink-0 cursor-zoom-in"
                   >
-                    <img
+                    <Image
                       src={url}
                       alt={`Attached ${idx + 1}`}
+                      width={80}
+                      height={80}
                       className="h-20 w-20 rounded-lg border border-stone-200 object-cover transition-all hover:opacity-90 dark:border-stone-700"
                     />
                     <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 transition-all group-hover:bg-black/20">
@@ -768,7 +771,7 @@ const TypingIndicator = memo(function TypingIndicator() {
 });
 
 // ─── Main component ───────────────────────────────────────────────
-export function ChatWorkspace({
+function ChatWorkspaceInner({
   documents,
   initialDocumentId,
   initialSessionId,
@@ -2400,9 +2403,11 @@ export function ChatWorkspace({
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white p-3 dark:border-stone-700 dark:bg-stone-800 shadow-sm">
                 {imagePreviews.map((preview, idx) => (
                   <div key={idx} className="relative group/image">
-                    <img
+                    <Image
                       src={preview}
                       alt={`Preview ${idx + 1}`}
+                      width={56}
+                      height={56}
                       className="h-14 w-14 rounded-lg border border-stone-200 object-cover transition-transform group-hover/image:scale-105 dark:border-stone-700"
                     />
                     {uploadingImage && idx === 0 && (
@@ -2602,3 +2607,14 @@ export function ChatWorkspace({
     </div>
   );
 }
+
+export const ChatWorkspace = memo(ChatWorkspaceInner, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if essential props change
+  return (
+    prevProps.documents === nextProps.documents &&
+    prevProps.initialDocumentId === nextProps.initialDocumentId &&
+    prevProps.initialSessionId === nextProps.initialSessionId &&
+    prevProps.initialMessages === nextProps.initialMessages &&
+    prevProps.initialNotes === nextProps.initialNotes
+  );
+});
