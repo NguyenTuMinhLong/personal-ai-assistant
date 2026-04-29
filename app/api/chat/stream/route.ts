@@ -222,7 +222,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Document not found." }, { status: 404 });
     }
   } else {
-    document = { id: documentId, filename: documentId };
+    // Guest mode: use a friendly name for the virtual document
+    const filename = documentId === "guest-default" ? "General Chat" : documentId;
+    document = { id: documentId, filename };
   }
 
   // ── Session management ────────────────────────────────────────

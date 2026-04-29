@@ -70,6 +70,12 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
     initialDocumentId = documents[0].id;
   }
 
+  // For guests without documents, use a virtual document ID
+  // The API will handle this by skipping RAG but still accepting the request
+  if (!initialDocumentId && !user) {
+    initialDocumentId = "guest-default";
+  }
+
   // Transform server messages + annotations into the shape ChatWorkspace expects
   const highlightMap = new Map(
     initialAnnotations.map((ann) => [ann.messageId, ann])

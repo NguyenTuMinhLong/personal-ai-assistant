@@ -1583,7 +1583,10 @@ function ChatWorkspaceInner({
       event.preventDefault();
       const trimmed = input.trim();
       if (!trimmed && selectedImages.length === 0 && filePreviews.length === 0) return;
-      if (!currentDocumentId) return;
+      if (!currentDocumentId) {
+        toast.error("Please select a document first.");
+        return;
+      }
 
       const imageUrls: string[] = [];
 
@@ -2192,23 +2195,22 @@ function ChatWorkspaceInner({
           </div>
 
           <div className="flex items-center gap-2 max-sm:gap-1.5 overflow-x-auto">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-xs text-stone-400 dark:text-stone-500 hidden sm:inline">Doc:</span>
-              <select
-                value={currentDocumentId ?? ""}
-                onChange={(e) => handleDocumentChange(e.target.value)}
-                className="appearance-none cursor-pointer rounded-lg border border-stone-200 bg-stone-50 px-2 py-1.5 pr-7 text-xs font-medium text-stone-600 transition-all hover:border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-200 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:focus:ring-stone-700 bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%239CA3AF%22%20stroke-width%3D%222%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat"
-              >
-                {documents.length === 0 && (
-                  <option value="">No documents</option>
-                )}
-                {documents.map((doc) => (
-                  <option key={doc.id} value={doc.id}>
-                    {doc.filename}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {!guest.isGuest && documents.length > 0 && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs text-stone-400 dark:text-stone-500 hidden sm:inline">Doc:</span>
+                <select
+                  value={currentDocumentId ?? ""}
+                  onChange={(e) => handleDocumentChange(e.target.value)}
+                  className="appearance-none cursor-pointer rounded-lg border border-stone-200 bg-stone-50 px-2 py-1.5 pr-7 text-xs font-medium text-stone-600 transition-all hover:border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-200 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:border-stone-600 dark:focus:ring-stone-700 bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%239CA3AF%22%20stroke-width%3D%222%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat"
+                >
+                  {documents.map((doc) => (
+                    <option key={doc.id} value={doc.id}>
+                      {doc.filename}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {selectedDocument && (
               <button
@@ -2304,21 +2306,30 @@ function ChatWorkspaceInner({
                 <MessageSquare className="h-7 w-7 text-stone-400 dark:text-stone-500" />
               </div>
               <h3 className="mb-1.5 text-base font-medium text-stone-700 dark:text-stone-100">
-                Start a conversation
+                {guest.isGuest ? "Start chatting" : "Start a conversation"}
               </h3>
               <p className="mb-6 text-sm text-stone-500 dark:text-stone-400">
-                Ask anything about{" "}
-                <span className="font-medium text-stone-600 dark:text-stone-300">
-                  {selectedDocument?.filename ?? "your document"}
-                </span>
+                {guest.isGuest
+                  ? "Ask me anything — I'll help based on my knowledge"
+                  : <>Ask anything about{" "}
+                    <span className="font-medium text-stone-600 dark:text-stone-300">
+                      {selectedDocument?.filename ?? "your document"}
+                    </span>
+                  </>
+                }
               </p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 max-w-sm">
-                {[
+                {(guest.isGuest ? [
+                  { text: "Help me with...", q: "Can you help me with a general question?" },
+                  { text: "Explain simply", q: "Explain this topic in simple terms" },
+                  { text: "Quick facts", q: "Give me some quick facts about" },
+                  { text: "How does it work?", q: "How does this work?" },
+                ] : [
                   { text: "Summarize key points", q: "Summarize the key points of this document" },
                   { text: "Explain simply", q: "Explain this in simple terms" },
                   { text: "Find details", q: "Find specific details about" },
                   { text: "Compare sections", q: "Compare different sections of this document" },
-                ].map((suggestion) => (
+                ]).map((suggestion) => (
                   <button
                     key={suggestion.text}
                     onClick={() => {
