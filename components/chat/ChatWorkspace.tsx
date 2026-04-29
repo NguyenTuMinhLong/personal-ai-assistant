@@ -1649,6 +1649,10 @@ function ChatWorkspaceInner({
       requestAnimationFrame(() => scrollToLatest());
 
       try {
+        const guestHeaders: HeadersInit = guest.isGuest
+          ? { "Content-Type": "application/json", "x-anonymous-id": guest.session!.anonymousId }
+          : { "Content-Type": "application/json" };
+
         if (streamingMode) {
           // ── Streaming mode ────────────────────────────────────────
           const clientMessageId = createMessageId();
@@ -1668,10 +1672,6 @@ function ChatWorkspaceInner({
               error: null,
             },
           ]);
-
-          const guestHeaders: HeadersInit = guest.isGuest
-            ? { "Content-Type": "application/json", "x-anonymous-id": guest.session!.anonymousId }
-            : { "Content-Type": "application/json" };
 
           const response = await fetch("/api/chat/stream", {
             method: "POST",
@@ -1761,11 +1761,12 @@ function ChatWorkspaceInner({
             }).catch(() => {});
           }
 
-          // ── Guest: increment message count after stream finishes ──
+          // Guest: increment message count after stream finishes
           if (guest.isGuest && guest.session) {
             void guest.incrementMessageCount(guest.session.anonymousId);
           }
         } else {
+          // ── Non-streaming mode ─────────────────────────────────
           const response = await fetch("/api/chat", {
             method: "POST",
             headers: guestHeaders,
@@ -1778,60 +1779,61 @@ function ChatWorkspaceInner({
             }),
           });
 
-        const payload = (await response.json()) as
-          | {
-              answer?: string;
-              citations?: Citation[];
-              sessionId?: string;
-              assistantMessageId?: string | null;
-              reused?: boolean;
-              error?: string;
-            }
-          | null;
+          const payload = (await response.json()) as
+            | {
+                answer?: string;
+                citations?: Citation[];
+                sessionId?: string;
+                assistantMessageId?: string | null;
+                reused?: boolean;
+                error?: string;
+              }
+            | null;
 
-        if (!response.ok || !payload?.answer) {
-          throw new Error(payload?.error || "Could not get an answer.");
-        }
+          if (!response.ok || !payload?.answer) {
+            throw new Error(payload?.error || "Could not get an answer.");
+          }
 
-        const answer = payload.answer;
-        const citations = payload.citations ?? [];
-        const assistantMessageId =
-          payload.assistantMessageId ?? createMessageId();
+          const answer = payload.answer;
+          const citations = payload.citations ?? [];
+          const assistantMessageId =
+            payload.assistantMessageId ?? createMessageId();
 
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: assistantMessageId,
-            role: "assistant",
-            content: answer,
-            citations,
-            highlightColor: null,
-            selectionStart: null,
-            selectionEnd: null,
-            createdAt: new Date().toISOString(),
-            error: null,
-          },
-        ]);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantMessageId,
+              role: "assistant",
+              content: answer,
+              citations,
+              highlightColor: null,
+              selectionStart: null,
+              selectionEnd: null,
+              createdAt: new Date().toISOString(),
+              error: null,
+            },
+          ]);
 
-        if (
-          payload.sessionId &&
-          payload.sessionId !== currentSessionId
-        ) {
-          setCurrentSessionId(payload.sessionId);
-          router.replace(
-            `/chat?documentId=${currentDocumentId}&sessionId=${payload.sessionId}`,
-          );
-        }
+          if (
+            payload.sessionId &&
+            payload.sessionId !== currentSessionId
+          ) {
+            setCurrentSessionId(payload.sessionId);
+            router.replace(
+              `/chat?documentId=${currentDocumentId}&sessionId=${payload.sessionId}`,
+            );
+          }
 
-        requestAnimationFrame(() => scrollToLatest());
+          requestAnimationFrame(() => scrollToLatest());
 
-        // ── Guest: increment message count ──
-        if (guest.isGuest && guest.session) {
-          void guest.incrementMessageCount(guest.session.anonymousId);
-        }
+          // Guest: increment message count on success
+          if (guest.isGuest && guest.session) {
+            void guest.incrementMessageCount(guest.session.anonymousId);
+          }
 
-        if (payload.reused) {
-          toast.success("Reused a previous answer — instant response!");
+          if (payload.reused) {
+            toast.success("Reused a previous answer — instant response!");
+          }
         }
       } catch (error) {
         const errorMessage =
@@ -1839,7 +1841,6 @@ function ChatWorkspaceInner({
             ? error.message
             : "Could not get an answer.";
 
-        // If trial ended, the popup will be shown via guest.isBlocked state
         if (errorMessage.includes("Trial ended")) {
           toast.error("Trial ended. Sign up to continue.");
         }
