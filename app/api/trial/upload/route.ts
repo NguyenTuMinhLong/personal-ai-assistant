@@ -151,7 +151,12 @@ export async function POST(req: NextRequest) {
     // Create document with trial user ID prefix and expiration
     const trialUserId = `trial_guest_${Date.now()}`;
 
-    const { data: doc, error: docError } = await supabase
+    // Try inserting with expires_at first, fallback to without it if column doesn't exist
+    let doc;
+    let docError;
+
+    // Attempt 1: with expires_at
+    const { data: docWithExpiry, error: docWithExpiryError } = await supabase
       .from("documents")
       .insert({
         user_id: trialUserId,
@@ -161,6 +166,34 @@ export async function POST(req: NextRequest) {
       })
       .select("id")
       .single();
+
+    if (docWithExpiryError) {
+      // Check if it's a "column does not exist" error
+      const isMissingColumn = docWithExpiryError.code === "42703" ||
+        docWithExpiryError.message?.includes("expires_at");
+
+      if (isMissingColumn) {
+        // Fallback: insert without expires_at column
+        const { data: docWithoutExpiry, error: docWithoutExpiryError } = await supabase
+          .from("documents")
+          .insert({
+            user_id: trialUserId,
+            filename: file.name,
+            content: text,
+          })
+          .select("id")
+          .single();
+
+        doc = docWithoutExpiry;
+        docError = docWithoutExpiryError;
+      } else {
+        doc = null;
+        docError = docWithExpiryError;
+      }
+    } else {
+      doc = docWithExpiry;
+      docError = null;
+    }
 
     if (docError || !doc) {
       console.error("Insert error:", docError);
