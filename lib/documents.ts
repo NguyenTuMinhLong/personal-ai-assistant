@@ -58,62 +58,70 @@ export async function listUserDocuments(userId: string) {
 
 export async function getUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase
-    .from("documents")
-    .select("id, filename, content, summary, expires_at")
-    .eq("id", documentId)
-    .eq("user_id", userId)
-    .is("deleted_at", null)
-    .maybeSingle();
+  
+  try {
+    const { data, error } = await supabase
+      .from("documents")
+      .select("id, filename, content, summary, expires_at")
+      .eq("id", documentId)
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .maybeSingle();
 
-  if (error) {
-    console.error("[getUserDocument]", error.code, error.message);
-    throw new Error(error.message || "Could not load document.");
-  }
+    if (error) {
+      console.error("[getUserDocument]", error.code, error.message);
+      return null;
+    }
 
-  if (!data || typeof data.content !== "string") {
+    if (!data || typeof data.content !== "string") {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      filename: data.filename,
+      content: data.content,
+      summary: data.summary,
+      expiresAt: data.expires_at,
+    } as StoredDocumentWithContent & { expiresAt?: string | null };
+  } catch (err) {
+    console.error("[getUserDocument] Unexpected error:", err);
     return null;
   }
-
-  return {
-    id: data.id,
-    filename: data.filename,
-    content: data.content,
-    summary: data.summary,
-    expiresAt: data.expires_at,
-  } as StoredDocumentWithContent & { expiresAt?: string | null };
 }
 
 export async function getTrialDocument(documentId: string): Promise<StoredDocumentWithContent & { expiresAt?: string | null } | null> {
   const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase
-    .from("documents")
-    .select("id, filename, content, summary, expires_at")
-    .eq("id", documentId)
-    .is("deleted_at", null)
-    .maybeSingle();
+  
+  try {
+    const { data, error } = await supabase
+      .from("documents")
+      .select("id, filename, content, summary, expires_at")
+      .eq("id", documentId)
+      .is("deleted_at", null)
+      .maybeSingle();
 
-  if (error) {
-    console.error("[getTrialDocument]", error.code, error.message);
+    if (error || !data || typeof data.content !== "string") {
+      return null;
+    }
+
+    // Check if expired
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      filename: data.filename,
+      content: data.content,
+      summary: data.summary,
+      expiresAt: data.expires_at,
+    };
+  } catch {
+    // Database error (e.g., missing column) - return null gracefully
+    console.error("[getTrialDocument] Database error, returning null:", documentId);
     return null;
   }
-
-  if (!data || typeof data.content !== "string") {
-    return null;
-  }
-
-  // Check if expired
-  if (data.expires_at && new Date(data.expires_at) < new Date()) {
-    return null;
-  }
-
-  return {
-    id: data.id,
-    filename: data.filename,
-    content: data.content,
-    summary: data.summary,
-    expiresAt: data.expires_at,
-  };
 }
 
 export async function listDocumentEmbeddings(documentId: string) {

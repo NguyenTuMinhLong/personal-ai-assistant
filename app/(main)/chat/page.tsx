@@ -65,6 +65,8 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
         expiresAt: trialDoc.expiresAt ?? undefined,
       }];
     }
+    // If trialDoc is null (expired or not found), documents stays empty
+    // The page will render without a document, showing an empty chat
   }
 
   // Determine which document to show
