@@ -1,44 +1,37 @@
 // app/api/cron/cleanup-expired/route.ts
 // Vercel Cron endpoint to clean up expired trial documents
 // Configured in vercel.json
+// Runs every 5 minutes: */5 * * * *
 
-import { createClient } from "@supabase/supabase-js";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-import { getSupabaseUrl } from "@/lib/supabase";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(request: Request) {
+// Vercel Cron sends POST requests
+export async function POST(req: NextRequest) {
   // Verify cron secret for security
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json(
-      { error: "Unauthorized" },
-      { status: 401 }
-    );
+  // Vercel automatically sets VERCEL_CRONS_SECRET env var
+  const cronSecret = process.env.VERCEL_CRONS_SECRET;
+  if (cronSecret) {
+    const authHeader = req.headers.get("authorization");
+    if (authHeader !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
-  const supabaseUrl = getSupabaseUrl();
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseServiceRoleKey) {
-    console.error("[cleanup] Missing SUPABASE_SERVICE_ROLE_KEY");
-    return NextResponse.json(
-      { error: "Server configuration error" },
-      { status: 500 }
-    );
-  }
-
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
+  const supabase = createSupabaseAdminClient();
 
   try {
+    // Count expired documents before deleting
+    const { count: expiredDocsCount } = await supabase
+      .from("documents")
+      .select("*", { count: "exact", head: true })
+      .not("expires_at", "is", null)
+      .lt("expires_at", new Date().toISOString());
+
     // Delete expired trial documents
     const { error: docsError } = await supabase
       .from("documents")
@@ -54,16 +47,16 @@ export async function GET(request: Request) {
       );
     }
 
-    // Get count of deleted documents
-    const { count: deletedDocs } = await supabase
-      .from("documents")
+    // Count orphaned guest sessions before deleting
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+    const { count: orphanedSessionsCount } = await supabase
+      .from("guest_sessions")
       .select("*", { count: "exact", head: true })
-      .not("expires_at", "is", null)
-      .lt("expires_at", new Date().toISOString());
+      .lt("last_active_at", twoHoursAgo)
+      .eq("message_count", 0);
 
     // Clean up orphaned guest sessions (no activity in 2 hours and no messages)
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    
     const { error: sessionsError } = await supabase
       .from("guest_sessions")
       .delete()
@@ -74,19 +67,12 @@ export async function GET(request: Request) {
       console.error("[cleanup] Error cleaning up guest sessions:", sessionsError);
     }
 
-    // Get count of deleted sessions
-    const { count: deletedSessions } = await supabase
-      .from("guest_sessions")
-      .select("*", { count: "exact", head: true })
-      .lt("last_active_at", twoHoursAgo)
-      .eq("message_count", 0);
-
-    console.log(`[cleanup] Deleted expired documents and sessions`);
+    console.log(`[cleanup] Deleted ${expiredDocsCount ?? 0} expired docs, ${orphanedSessionsCount ?? 0} orphaned sessions`);
 
     return NextResponse.json({
       success: true,
-      deletedDocuments: deletedDocs ?? 0,
-      deletedSessions: deletedSessions ?? 0,
+      deletedDocuments: expiredDocsCount ?? 0,
+      deletedSessions: orphanedSessionsCount ?? 0,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
