@@ -30,10 +30,28 @@ function isDocxFile(file: File) {
   return file.type.includes("wordprocessingml.document");
 }
 
+function isPdfByExtension(name: string) {
+  return name.toLowerCase().endsWith(".pdf");
+}
+
+function isValidPdfBuffer(buffer: Buffer): boolean {
+  return (
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  );
+}
+
 async function extractText(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  if (file.type === "application/pdf") {
+  if (file.type === "application/pdf" || isPdfByExtension(file.name)) {
+    if (!isValidPdfBuffer(buffer)) {
+      throw new Error(
+        "File is not a valid PDF document. The file may be corrupted or is not actually a PDF."
+      );
+    }
     const { PDFParse } = await import("pdf-parse");
     const parser = new PDFParse({ data: buffer });
     const result = await parser.getText();
@@ -151,11 +169,10 @@ export async function POST(req: NextRequest) {
     // Create document with trial user ID prefix and expiration
     const trialUserId = `trial_guest_${Date.now()}`;
 
-    // Try inserting with expires_at first, fallback to without it if column doesn't exist
+    // Try with expires_at first; if it fails for ANY reason, fallback to without it
     let doc;
     let docError;
 
-    // Attempt 1: with expires_at
     const { data: docWithExpiry, error: docWithExpiryError } = await supabase
       .from("documents")
       .insert({
@@ -168,28 +185,19 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (docWithExpiryError) {
-      // Check if it's a "column does not exist" error
-      const isMissingColumn = docWithExpiryError.code === "42703" ||
-        docWithExpiryError.message?.includes("expires_at");
+      // Fallback: insert without expires_at (column may not exist yet)
+      const { data: docWithoutExpiry, error: docWithoutExpiryError } = await supabase
+        .from("documents")
+        .insert({
+          user_id: trialUserId,
+          filename: file.name,
+          content: text,
+        })
+        .select("id")
+        .single();
 
-      if (isMissingColumn) {
-        // Fallback: insert without expires_at column
-        const { data: docWithoutExpiry, error: docWithoutExpiryError } = await supabase
-          .from("documents")
-          .insert({
-            user_id: trialUserId,
-            filename: file.name,
-            content: text,
-          })
-          .select("id")
-          .single();
-
-        doc = docWithoutExpiry;
-        docError = docWithoutExpiryError;
-      } else {
-        doc = null;
-        docError = docWithExpiryError;
-      }
+      doc = docWithoutExpiry;
+      docError = docWithoutExpiryError;
     } else {
       doc = docWithExpiry;
       docError = null;

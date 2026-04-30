@@ -35,6 +35,19 @@ function isDocxFile(file: File) {
   return file.type.includes("wordprocessingml.document");
 }
 
+function isPdfByExtension(name: string) {
+  return name.toLowerCase().endsWith(".pdf");
+}
+
+function isValidPdfBuffer(buffer: Buffer): boolean {
+  return (
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  );
+}
+
 function formatSupabaseError(error: SupabaseLikeError, supabaseUrl: string) {
   const details = `${error.message ?? ""}\n${error.details ?? ""}\n${
     error.hint ?? ""
@@ -60,7 +73,12 @@ function formatSupabaseError(error: SupabaseLikeError, supabaseUrl: string) {
 async function extractText(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  if (file.type === "application/pdf") {
+  if (file.type === "application/pdf" || isPdfByExtension(file.name)) {
+    if (!isValidPdfBuffer(buffer)) {
+      throw new Error(
+        "File is not a valid PDF document. The file may be corrupted or is not actually a PDF."
+      );
+    }
     const { PDFParse } = await import("pdf-parse");
     const parser = new PDFParse({ data: buffer });
     const result = await parser.getText();
