@@ -11,14 +11,18 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const user = await currentUser();
+  const anonymousId = req.headers.get("x-anonymous-id");
+  const isTrialMode = !!req.headers.get("x-trial-document-id");
 
-  if (!user) {
+  if (!user && !anonymousId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { sessionId } = await params;
 
-  const session = await getChatSession(user.id, sessionId);
+  const effectiveUserId = user?.id ?? anonymousId!;
+
+  const session = await getChatSession(effectiveUserId, sessionId);
 
   if (!session) {
     return NextResponse.json({ error: "Session not found." }, { status: 404 });
@@ -33,7 +37,7 @@ export async function GET(
   if (direction === "older") {
     const [messages, annotations, total] = await Promise.all([
       listMessages(sessionId, { limit, offset }),
-      listSessionAnnotations(user.id, sessionId),
+      listSessionAnnotations(effectiveUserId, sessionId),
       countMessages(sessionId),
     ]);
 
