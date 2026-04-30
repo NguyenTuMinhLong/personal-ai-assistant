@@ -18,7 +18,7 @@ import {
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
-import { TryFreeButton } from "@/components/TryFreeButton";
+import { TryFreeButton, TryFreeLink } from "@/components/TryFreeButton";
 
 export default async function HomePage() {
   const user = await currentUser();
