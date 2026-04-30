@@ -20,8 +20,6 @@ export default function RootLayout({
     <ClerkProvider
       signInUrl="/sign-in"
       signUpUrl="/sign-up"
-      afterSignInUrl="/documents"
-      afterSignUpUrl="/documents"
     >
       <html lang="vi" suppressHydrationWarning>
         <head>
