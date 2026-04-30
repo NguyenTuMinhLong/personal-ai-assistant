@@ -45,6 +45,7 @@ function isValidPdfBuffer(buffer: Buffer): boolean {
 
 async function extractText(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
+  const arrayBuffer = await file.arrayBuffer();
 
   if (file.type === "application/pdf" || isPdfByExtension(file.name)) {
     if (!isValidPdfBuffer(buffer)) {
@@ -68,7 +69,7 @@ async function extractText(file: File) {
   if (isDocxFile(file)) {
     try {
       const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      const result = await mammoth.extractRawText({ arrayBuffer });
       return result.value || "";
     } catch (docxError) {
       console.error("[trial-upload] DOCX parse error:", docxError);
