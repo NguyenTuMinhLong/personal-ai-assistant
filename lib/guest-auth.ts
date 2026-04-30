@@ -44,6 +44,7 @@ export async function getGuestLimits(anonymousId: string | null): Promise<GuestL
 
   if (error || !data) {
     // No session found — treat as new guest
+    console.log(`[guest-auth] No session found for ${anonymousId}, treating as new guest`);
     return {
       isGuest: true,
       anonymousId,
@@ -56,6 +57,8 @@ export async function getGuestLimits(anonymousId: string | null): Promise<GuestL
 
   const messageCount = data.message_count ?? 0;
   const uploadUsed = data.upload_used ?? false;
+
+  console.log(`[guest-auth] Session found for ${anonymousId}: messageCount=${messageCount}, uploadUsed=${uploadUsed}`);
 
   return {
     isGuest: true,

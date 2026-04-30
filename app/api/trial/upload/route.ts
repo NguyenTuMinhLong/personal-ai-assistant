@@ -52,17 +52,29 @@ async function extractText(file: File) {
         "File is not a valid PDF document. The file may be corrupted or is not actually a PDF."
       );
     }
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
-    const result = await parser.getText();
-    await parser.destroy();
-    return result.text;
+    try {
+      const pdfParse = (await import("pdf-parse")).default;
+      const result = await pdfParse(buffer);
+      return result.text || "";
+    } catch (pdfError) {
+      console.error("[trial-upload] PDF parse error:", pdfError);
+      throw new Error(
+        "Failed to extract text from PDF. The file may be corrupted or password-protected."
+      );
+    }
   }
 
   if (isDocxFile(file)) {
-    const mammoth = await import("mammoth");
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value;
+    try {
+      const mammoth = await import("mammoth");
+      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      return result.value || "";
+    } catch (docxError) {
+      console.error("[trial-upload] DOCX parse error:", docxError);
+      throw new Error(
+        "Failed to extract text from DOCX. The file may be corrupted."
+      );
+    }
   }
 
   if (TEXT_FILE_TYPES.has(file.type)) {
@@ -169,39 +181,43 @@ export async function POST(req: NextRequest) {
     // Create document with trial user ID prefix and expiration
     const trialUserId = `trial_guest_${Date.now()}`;
 
-    // Try with expires_at first; if it fails for ANY reason, fallback to without it
-    let doc;
-    let docError;
+  // Try with expires_at first; if it fails for ANY reason, fallback to without it
+  let doc;
+  let docError;
 
-    const { data: docWithExpiry, error: docWithExpiryError } = await supabase
+  console.log(`[trial-upload] Attempting to insert document for ${file.name}`);
+
+  const { data: docWithExpiry, error: docWithExpiryError } = await supabase
+    .from("documents")
+    .insert({
+      user_id: trialUserId,
+      filename: file.name,
+      content: text,
+      expires_at: expiresAt,
+    })
+    .select("id")
+    .single();
+
+  if (docWithExpiryError) {
+    console.log(`[trial-upload] Insert with expires_at failed:`, docWithExpiryError);
+    // Fallback: insert without expires_at (column may not exist yet)
+    const { data: docWithoutExpiry, error: docWithoutExpiryError } = await supabase
       .from("documents")
       .insert({
         user_id: trialUserId,
         filename: file.name,
         content: text,
-        expires_at: expiresAt,
       })
       .select("id")
       .single();
 
-    if (docWithExpiryError) {
-      // Fallback: insert without expires_at (column may not exist yet)
-      const { data: docWithoutExpiry, error: docWithoutExpiryError } = await supabase
-        .from("documents")
-        .insert({
-          user_id: trialUserId,
-          filename: file.name,
-          content: text,
-        })
-        .select("id")
-        .single();
-
-      doc = docWithoutExpiry;
-      docError = docWithoutExpiryError;
-    } else {
-      doc = docWithExpiry;
-      docError = null;
-    }
+    doc = docWithoutExpiry;
+    docError = docWithoutExpiryError;
+  } else {
+    doc = docWithExpiry;
+    docError = null;
+    console.log(`[trial-upload] Document inserted successfully:`, doc?.id);
+  }
 
     if (docError || !doc) {
       console.error("Insert error:", docError);
@@ -257,6 +273,8 @@ export async function POST(req: NextRequest) {
 
       if (embeddingError) {
         console.error("Embedding batch insert error:", file.name, embeddingError);
+      } else {
+        console.log(`[trial-upload] Embeddings inserted successfully: ${embeddingRows.length} chunks`);
       }
     }
 
