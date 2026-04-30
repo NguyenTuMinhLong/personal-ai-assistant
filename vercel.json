@@ -31,7 +31,7 @@
   "crons": [
     {
       "path": "/api/cron/cleanup-expired",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 0 * * *"
     }
   ],
   "functions": {
