@@ -1226,17 +1226,16 @@ function ChatWorkspaceInner({
 
   // ── Load session messages ──────────────────────────────────────
   useEffect(() => {
-    if (initialMessages && initialMessages.length > 0) {
-      if (currentSessionId) {
-        loadedSessionRef.current = currentSessionId;
-      }
-      return;
-    }
-
+    // No session → nothing to load (including trial mode with no existing session)
     if (!currentSessionId) {
       setMessages([]);
       setNotes([]);
       setLoadingHistory(false);
+      return;
+    }
+
+    if (initialMessages && initialMessages.length > 0) {
+      loadedSessionRef.current = currentSessionId;
       return;
     }
 
