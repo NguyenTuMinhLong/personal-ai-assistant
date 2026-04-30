@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getChatModel, getEmbeddingModel } from "@/lib/ai";
 import { hybridSearch } from "@/lib/hybrid-search";
 import { buildContext } from "@/lib/context-builder";
-import { getUserDocument } from "@/lib/documents";
+import { getUserDocument, getTrialDocument } from "@/lib/documents";
 import { searchFileChunks } from "@/lib/file-cache";
 import {
   createChatSession,
@@ -216,13 +216,30 @@ export async function POST(req: NextRequest) {
 
   // ── Document lookup ──
   let document: { id: string; filename: string } | null = null;
-  if (!isGuestMode) {
+  const isTrialMode = !!req.headers.get("x-trial-document-id");
+
+  if (!isGuestMode && !isTrialMode) {
+    // Authenticated user with their own document
     document = await getUserDocument(user!.id, documentId);
     if (!document) {
       return NextResponse.json({ error: "Document not found." }, { status: 404 });
     }
+  } else if (isTrialMode) {
+    // Trial guest with temporary uploaded document
+    const trialDocumentId = req.headers.get("x-trial-document-id");
+    if (!trialDocumentId) {
+      return NextResponse.json({ error: "Trial document ID required." }, { status: 400 });
+    }
+    const trialDoc = await getTrialDocument(trialDocumentId);
+    if (!trialDoc) {
+      return NextResponse.json(
+        { error: "Trial document expired or not found. Please upload a new file.", trialExpired: true },
+        { status: 410 }
+      );
+    }
+    document = { id: trialDoc.id, filename: trialDoc.filename };
   } else {
-    // Guest mode: use a friendly name for the virtual document
+    // Guest mode without document: use general chat
     const filename = documentId === "guest-default" ? "General Chat" : documentId;
     document = { id: documentId, filename };
   }
@@ -271,9 +288,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── RAG: hybrid search (skip for guest mode — no uploaded documents) ──
+  // ── RAG: hybrid search (skip for guest mode without document) ──
+  // Trial mode with document can use RAG
   let context = "";
-  if (!isGuestMode) {
+  if (!isGuestMode || (isTrialMode && document)) {
     const { embedding: queryEmbedding } = await embed({
       model: getEmbeddingModel(),
       value: message,

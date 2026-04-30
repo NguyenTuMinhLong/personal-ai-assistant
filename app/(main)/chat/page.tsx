@@ -1,15 +1,17 @@
 import { currentUser } from "@clerk/nextjs/server";
 
 import { ChatWorkspaceClient } from "./ChatWorkspaceClient";
-import { listUserDocuments } from "@/lib/documents";
+import { listUserDocuments, getTrialDocument } from "@/lib/documents";
 import { getChatSession, listMessages } from "@/lib/sessions";
 import { listSessionAnnotations } from "@/lib/annotations";
+import type { StoredDocument } from "@/lib/documents";
 import type { ChatSession, Message, MessageAnnotation, HighlightColor } from "@/types";
 
 type ChatPageProps = {
   searchParams: Promise<{
     documentId?: string | string[];
     sessionId?: string | string[];
+    trial?: string | string[];
   }>;
 };
 
@@ -22,12 +24,14 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
 
   const documentIdParam = params.documentId;
   const sessionIdParam = params.sessionId;
+  const isTrialParam = params.trial;
   const sessionId =
     typeof sessionIdParam === "string" ? sessionIdParam : null;
+  const isTrial = isTrialParam === "true" || isTrialParam === "1";
 
   // ── Authenticated users: load their documents and session data ──
   // ── Guest users: handled client-side via useGuestSession ──
-  let documents: Awaited<ReturnType<typeof listUserDocuments>> = [];
+  let documents: StoredDocument[] = [];
   let session: ChatSession | null = null;
   let initialMessages: Message[] = [];
   let initialAnnotations: MessageAnnotation[] = [];
@@ -50,29 +54,47 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
       Message[],
       MessageAnnotation[]
     ];
+  } else if (isTrial && typeof documentIdParam === "string") {
+    // Trial mode: load the trial document
+    const trialDoc = await getTrialDocument(documentIdParam);
+    if (trialDoc) {
+      documents = [{
+        id: trialDoc.id,
+        filename: trialDoc.filename,
+        summary: trialDoc.summary ?? undefined,
+        expiresAt: trialDoc.expiresAt ?? undefined,
+      }];
+    }
   }
 
   // Determine which document to show
   let initialDocumentId: string | null = null;
 
   if (typeof documentIdParam === "string" && documentIdParam) {
-    initialDocumentId = documents.some((doc) => doc.id === documentIdParam)
-      ? documentIdParam
-      : null;
+    // For trial mode, check if it's a valid trial document
+    if (isTrial) {
+      initialDocumentId = documents.some((doc) => doc.id === documentIdParam)
+        ? documentIdParam
+        : null;
+    } else {
+      initialDocumentId = documents.some((doc) => doc.id === documentIdParam)
+        ? documentIdParam
+        : null;
+    }
   } else if (session) {
     initialDocumentId = documents.some((doc) => doc.id === session.document_id)
       ? session.document_id
       : null;
   }
 
-  // Fallback to first document only if authenticated
-  if (!initialDocumentId && documents.length > 0) {
+  // Fallback to first document only if authenticated (not trial)
+  if (!initialDocumentId && documents.length > 0 && !isTrial) {
     initialDocumentId = documents[0].id;
   }
 
-  // For guests without documents, use a virtual document ID
+  // For guests without documents (not trial mode), use a virtual document ID
   // The API will handle this by skipping RAG but still accepting the request
-  if (!initialDocumentId && !user) {
+  if (!initialDocumentId && !user && !isTrial) {
     initialDocumentId = "guest-default";
   }
 
@@ -113,6 +135,8 @@ export default async function ChatPage({ searchParams }: ChatPageProps) {
       initialSessionId={sessionId}
       initialMessages={transformedMessages}
       initialNotes={transformedAnnotations}
+      isTrial={isTrial}
+      trialDocumentId={isTrial ? (typeof documentIdParam === "string" ? documentIdParam : null) : null}
     />
   );
 }

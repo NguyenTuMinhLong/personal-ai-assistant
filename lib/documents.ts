@@ -7,6 +7,7 @@ export type StoredDocument = {
   id: string;
   filename: string;
   summary?: string | null;
+  expiresAt?: string | null;
 };
 
 export type StoredDocumentWithContent = StoredDocument & {
@@ -35,7 +36,8 @@ function createSupabaseAdminClient() {
   });
 }
 
-// documents table columns: id, filename, content, summary, created_at, user_id, deleted_at
+// documents table columns: id, filename, content, summary, created_at, user_id, deleted_at, expires_at
+
 export async function listUserDocuments(userId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
@@ -43,6 +45,7 @@ export async function listUserDocuments(userId: string) {
     .select("id, filename, summary")
     .eq("user_id", userId)
     .is("deleted_at", null)
+    .is("expires_at", null) // Exclude expired trial documents
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -57,7 +60,7 @@ export async function getUserDocument(userId: string, documentId: string) {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("documents")
-    .select("id, filename, content, summary")
+    .select("id, filename, content, summary, expires_at")
     .eq("id", documentId)
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -72,7 +75,45 @@ export async function getUserDocument(userId: string, documentId: string) {
     return null;
   }
 
-  return data as StoredDocumentWithContent;
+  return {
+    id: data.id,
+    filename: data.filename,
+    content: data.content,
+    summary: data.summary,
+    expiresAt: data.expires_at,
+  } as StoredDocumentWithContent & { expiresAt?: string | null };
+}
+
+export async function getTrialDocument(documentId: string): Promise<StoredDocumentWithContent & { expiresAt?: string | null } | null> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("documents")
+    .select("id, filename, content, summary, expires_at")
+    .eq("id", documentId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[getTrialDocument]", error.code, error.message);
+    return null;
+  }
+
+  if (!data || typeof data.content !== "string") {
+    return null;
+  }
+
+  // Check if expired
+  if (data.expires_at && new Date(data.expires_at) < new Date()) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    filename: data.filename,
+    content: data.content,
+    summary: data.summary,
+    expiresAt: data.expires_at,
+  };
 }
 
 export async function listDocumentEmbeddings(documentId: string) {

@@ -43,6 +43,7 @@ import { useChatSessions } from "@/hooks/useChatSessions";
 import { useGuestSession } from "@/hooks/useGuestSession";
 import { GuestTrialBanner } from "./GuestTrialBanner";
 import { GuestTrialPopup } from "@/components/GuestTrialPopup";
+import { TrialFeedback } from "@/components/TrialFeedback";
 import type { StoredDocument } from "@/lib/documents";
 
 type Citation = {
@@ -96,6 +97,8 @@ type ChatWorkspaceProps = {
   initialSessionId: string | null;
   initialMessages?: ChatMessage[];
   initialNotes?: SavedNote[];
+  isTrial?: boolean;
+  trialDocumentId?: string | null;
 };
 
 // ─── Highlight colors ────────────────────────────────────────────
@@ -780,6 +783,8 @@ function ChatWorkspaceInner({
   initialSessionId,
   initialMessages,
   initialNotes,
+  isTrial,
+  trialDocumentId,
 }: ChatWorkspaceProps) {
   // ── State ────────────────────────────────────────────────────
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(
@@ -1653,7 +1658,11 @@ function ChatWorkspaceInner({
 
       try {
         const guestHeaders: HeadersInit = guest.isGuest
-          ? { "Content-Type": "application/json", "x-anonymous-id": guest.session!.anonymousId }
+          ? {
+              "Content-Type": "application/json",
+              "x-anonymous-id": guest.session!.anonymousId,
+              ...(isTrial && trialDocumentId ? { "x-trial-document-id": trialDocumentId } : {}),
+            }
           : { "Content-Type": "application/json" };
 
         if (streamingMode) {
@@ -2409,6 +2418,15 @@ function ChatWorkspaceInner({
           />
         )}
 
+        {/* Trial feedback - show when 2 messages left */}
+        {guest.isGuest && !guest.isLoading && messages.length > 0 && (
+          <TrialFeedback
+            messageCount={guest.messagesRemaining}
+            totalLimit={10}
+            onDismiss={() => {}}
+          />
+        )}
+
         {/* Guest trial popup */}
         <GuestTrialPopup
           isOpen={guest.showPopup}
@@ -2677,6 +2695,8 @@ export const ChatWorkspace = memo(ChatWorkspaceInner, (prevProps, nextProps) => 
     prevProps.initialDocumentId === nextProps.initialDocumentId &&
     prevProps.initialSessionId === nextProps.initialSessionId &&
     prevProps.initialMessages === nextProps.initialMessages &&
-    prevProps.initialNotes === nextProps.initialNotes
+    prevProps.initialNotes === nextProps.initialNotes &&
+    prevProps.isTrial === nextProps.isTrial &&
+    prevProps.trialDocumentId === nextProps.trialDocumentId
   );
 });

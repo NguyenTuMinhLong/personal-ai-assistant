@@ -46,6 +46,8 @@ type ChatWorkspaceClientProps = {
     messageId: string;
     isPinned?: boolean;
   }>;
+  isTrial?: boolean;
+  trialDocumentId?: string | null;
 };
 
 export function ChatWorkspaceClient(props: ChatWorkspaceClientProps) {

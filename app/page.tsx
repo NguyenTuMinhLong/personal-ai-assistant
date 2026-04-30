@@ -18,6 +18,8 @@ import {
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
+import { TryFreeButton } from "@/components/TryFreeButton";
+
 export default async function HomePage() {
   const user = await currentUser();
 
@@ -92,20 +94,8 @@ export default async function HomePage() {
               &mdash; try it right now, free for 10 messages.
             </p>
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-              <Link
-                href="/chat"
-                className="group inline-flex items-center gap-2.5 rounded-xl bg-stone-900 px-8 py-4 text-base font-semibold text-white shadow-xl transition-all hover:bg-stone-800 hover:shadow-2xl hover:shadow-stone-900/20 hover:-translate-y-0.5 active:translate-y-0 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200"
-              >
-                <Upload className="h-5 w-5" />
-                Try free now &mdash; 10 messages
-                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </Link>
-              <Link
-                href="/sign-up"
-                className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-8 py-4 text-base font-medium text-stone-700 backdrop-blur-sm transition-all hover:border-stone-300 hover:bg-stone-50 hover:shadow-lg dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:bg-stone-800"
-              >
-                Create free account
-              </Link>
+              <TryFreeButton />
+              <TryFreeLink />
             </div>
           </div>
 
@@ -351,19 +341,8 @@ export default async function HomePage() {
                   Free for your first 10 messages.
                 </p>
                 <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-                  <Link
-                    href="/chat"
-                    className="group inline-flex items-center gap-2.5 rounded-xl bg-stone-900 px-8 py-4 text-base font-semibold text-white shadow-xl transition-all hover:bg-stone-800 hover:shadow-2xl hover:-translate-y-0.5 active:translate-y-0 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200"
-                  >
-                    Try for free now
-                    <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
-                  </Link>
-                  <Link
-                    href="/sign-up"
-                    className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-8 py-4 text-base font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 hover:shadow-lg dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:border-stone-600 dark:hover:bg-stone-800"
-                  >
-                    Create account
-                  </Link>
+                  <TryFreeButton />
+                  <TryFreeLink />
                 </div>
                 <p className="mt-4 text-xs text-stone-400 dark:text-stone-500">
                   Unlimited messages with a free account
