@@ -53,7 +53,8 @@ async function extractText(file: File) {
       );
     }
     try {
-      const pdfParse = (await import("pdf-parse")).default;
+      const pdfParseModule = await import("pdf-parse");
+      const pdfParse = pdfParseModule.default || pdfParseModule;
       const result = await pdfParse(buffer);
       return result.text || "";
     } catch (pdfError) {
